@@ -55,8 +55,8 @@ gateway_url = "http://ipfs.io"
 ws_url = "ws://127.0.0.1:9944"
 # Read the miner profile CID from this pallet/storage.
 # Option A — dynamic storage lookup:
-pallet = "HippiusMiner" # e.g., your pallet name
-storage_item = "MinerProfileCid" # e.g., storage map (AccountId32 -> BoundedVec<u8>)
+pallet = "IpfsPallet" # e.g., your pallet name
+storage_item = "MinerProfile" # e.g., storage map (AccountId32 -> BoundedVec<u8>)
 # 32-byte hex account id of the miner whose profile we track (without 0x)
 miner_account_hex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
