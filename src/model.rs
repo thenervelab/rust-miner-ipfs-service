@@ -2,7 +2,8 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct Profile {
-    //    pub version: Option<u32>,
+    #[allow(dead_code)]
+    pub version: Option<u32>,
     #[serde(default)]
     pub pin: Vec<PinItem>,
 }
@@ -10,6 +11,7 @@ pub struct Profile {
 #[derive(Debug, Deserialize)]
 pub struct PinItem {
     pub cid: String,
-    //    #[serde(default)]
-    //    pub priority: Option<i32>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub priority: Option<i32>,
 }

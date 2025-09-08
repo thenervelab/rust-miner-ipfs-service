@@ -8,7 +8,6 @@ use tokio::{sync::Notify, time};
 use crate::{db, ipfs::Client as Ipfs, model::Profile, settings::Settings, substrate::Chain};
 
 pub async fn run(cfg: Settings, pool: SqlitePool) -> Result<()> {
-    println!("mark 0");
     let shutdown = Arc::new(Notify::new());
     {
         let s = shutdown.clone();
@@ -19,8 +18,6 @@ pub async fn run(cfg: Settings, pool: SqlitePool) -> Result<()> {
     }
 
     let chain = Chain::connect(&cfg.substrate.ws_url).await?;
-
-    println!("mark 1");
 
     let ipfs = Ipfs::new(cfg.ipfs.api_url.clone());
 
