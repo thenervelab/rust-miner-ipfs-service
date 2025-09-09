@@ -20,15 +20,15 @@ impl Client {
     pub async fn cat_json<T: for<'de> serde::Deserialize<'de>>(&self, cid: &str) -> Result<T> {
         // Try gateway first if base looks like a gateway, otherwise use /api/v0/cat
         let url = self.base.join("/api/v0/cat")?;
-        let resp = self
-            .http
-            .post(url)
-            .query(&[("arg", cid)])
-            .send()
-            .await?
-            .error_for_status()?;
-        let bytes = resp.bytes().await?;
-        Ok(serde_json::from_slice(&bytes).context("invalid_profile_json")?)
+        let resp = self.http.post(url).query(&[("arg", cid)]).send().await;
+
+        let resp = resp?.error_for_status()?;
+
+        let body = resp.text().await?;
+
+        let json: T = serde_json::from_str(&body).context("invalid_profile_json")?;
+
+        Ok(json)
     }
 
     pub async fn pin_add(&self, cid: &str) -> Result<()> {

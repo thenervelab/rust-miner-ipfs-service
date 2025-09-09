@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 use std::{sync::Arc, time::Duration};
 use tokio::{sync::Notify, time};
 
-use crate::{db, ipfs::Client as Ipfs, model::Profile, settings::Settings, substrate::Chain};
+use crate::{db, ipfs::Client as Ipfs, model::FileInfo, settings::Settings, substrate::Chain};
 
 pub async fn run(cfg: Settings, pool: SqlitePool) -> Result<()> {
     let shutdown = Arc::new(Notify::new());
@@ -74,25 +74,24 @@ pub async fn reconcile_once(cfg: &Settings, pool: &SqlitePool) -> Result<()> {
     };
 
     // Fetch profile JSON from IPFS
-    let profile: Profile = retry(backoff(&cfg), || async {
+    let profile: Vec<FileInfo> = retry(backoff(&cfg), || async {
         let p = ipfs
-            .cat_json::<Profile>(&profile_cid)
+            .cat_json::<Vec<FileInfo>>(&profile_cid)
             .await
-            .context("fetch_profile")?;
+            .context("fetch_profile");
+
+        let p = p?;
+
         Ok(p)
     })
     .await?;
 
-    tracing::info!(pins = profile.pin.len(), "profile_loaded");
+    tracing::info!(pins = profile.len(), "profile_loaded");
 
     // Mark all unseen, then mark listed CIDs as seen
     db::mark_all_unseen(pool).await?;
 
-    let desired: Vec<String> = profile
-        .pin
-        .iter()
-        .map(|p| p.cid.trim().to_string())
-        .collect();
+    let desired: Vec<String> = profile.iter().map(|p| p.cid.trim().to_string()).collect();
 
     // Pin new/ensure present
     let sem = Arc::new(tokio::sync::Semaphore::new(

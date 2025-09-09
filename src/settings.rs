@@ -45,11 +45,11 @@ pub struct Settings {
 pub async fn load(path: Option<&str>) -> Result<Settings> {
     let mut fig = Figment::from(Serialized::defaults(Settings{
         service: ServiceCfg{
-            poll_interval_secs: 60,
-            reconcile_interval_secs: 300,
-            ipfs_gc_interval_secs: 3600,
-            max_concurrent_ipfs_ops: 8,
-            retry_max_elapsed_secs: 600,
+            poll_interval_secs: 10,
+            reconcile_interval_secs: 10,
+            ipfs_gc_interval_secs: 30,
+            max_concurrent_ipfs_ops: 16,
+            retry_max_elapsed_secs: 10,
         },
         db: DbCfg{ path: "./miner.db".into() },
         ipfs: IpfsCfg{ api_url: "http://127.0.0.1:5001".into(), gateway_url: Some("http://127.0.0.1:8080".into()) },
