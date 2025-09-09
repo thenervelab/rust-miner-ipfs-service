@@ -58,7 +58,7 @@ ws_url = "ws://127.0.0.1:9944"
 pallet = "IpfsPallet" # e.g., your pallet name
 storage_item = "MinerProfile" # e.g., storage map (AccountId32 -> BoundedVec<u8>)
 # 32-byte hex account id of the miner whose profile we track (without 0x)
-miner_account_hex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+miner_profile_id = "12D3KooWDEfckrwi1YC3Pv9fqwFz8GGpW1xoVPWdu7mEGsjVwSV1"
 
 
 # Option B — raw storage key (overrides above if set)

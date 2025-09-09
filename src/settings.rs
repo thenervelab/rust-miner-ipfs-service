@@ -30,7 +30,7 @@ pub struct SubstrateCfg {
     pub ws_url: String,
     pub pallet: Option<String>,
     pub storage_item: Option<String>,
-    pub miner_account_hex: Option<String>,
+    pub miner_profile_id: Option<String>,
     pub raw_storage_key_hex: Option<String>,
 }
 
@@ -53,7 +53,7 @@ pub async fn load(path: Option<&str>) -> Result<Settings> {
         },
         db: DbCfg{ path: "./miner.db".into() },
         ipfs: IpfsCfg{ api_url: "http://127.0.0.1:5001".into(), gateway_url: Some("http://127.0.0.1:8080".into()) },
-        substrate: SubstrateCfg{ ws_url: "ws://127.0.0.1:9944".into(), pallet: None, storage_item: None, miner_account_hex: None, raw_storage_key_hex: None },
+        substrate: SubstrateCfg{ ws_url: "ws://127.0.0.1:9944".into(), pallet: None, storage_item: None, miner_profile_id: None, raw_storage_key_hex: None },
     }))
     .merge(Env::prefixed("MINER_")) // e.g. MINER_SERVICE__POLL_INTERVAL_SECS
     ;

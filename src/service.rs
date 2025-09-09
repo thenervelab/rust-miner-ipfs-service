@@ -52,7 +52,7 @@ pub async fn update_profile_cid(cfg: &Settings, pool: &SqlitePool, chain: &Chain
             cfg.substrate.raw_storage_key_hex.as_deref(),
             cfg.substrate.pallet.as_deref(),
             cfg.substrate.storage_item.as_deref(),
-            cfg.substrate.miner_account_hex.as_deref(),
+            cfg.substrate.miner_profile_id.as_deref(),
         )
         .await?;
 

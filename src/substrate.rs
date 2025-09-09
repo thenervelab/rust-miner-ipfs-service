@@ -18,7 +18,7 @@ impl Chain {
         raw_storage_key_hex: Option<&str>,
         pallet: Option<&str>,
         storage_item: Option<&str>,
-        miner_account_hex: Option<&str>,
+        miner_profile_id: Option<&str>,
     ) -> Result<Option<String>> {
         if let Some(raw_key) = raw_storage_key_hex {
             let key = <Vec<u8>>::from_hex(raw_key).context("invalid raw_storage_key_hex")?;
@@ -29,15 +29,42 @@ impl Chain {
 
         let pallet = pallet.context("missing pallet in config")?;
         let item = storage_item.context("missing storage_item in config")?;
-        let miner_hex = miner_account_hex.context("missing miner_account_hex in config")?;
-        let account = <[u8; 32]>::from_hex(miner_hex).context("invalid miner_account_hex")?;
+        let miner_hex = miner_profile_id.context("missing miner_profile_id in config")?;
 
-        let addr = storage(pallet, item, vec![account.to_vec().into()]);
-        let storage_client = self.client.storage().at_latest().await?;
-        let maybe_val = storage_client.fetch(&addr).await?;
-        let bytes: Option<Vec<u8>> = maybe_val.map(|val| val.encoded().to_vec());
+        let key_bytes = miner_hex.as_bytes().to_vec();
 
-        Ok(bytes.map(bytes_to_string))
+        let storage_addr = storage(
+            pallet,
+            item,
+            vec![subxt::dynamic::Value::from_bytes(key_bytes)],
+        );
+
+        let maybe_profile = self
+            .client
+            .storage()
+            .at_latest()
+            .await?
+            .fetch(&storage_addr)
+            .await?;
+
+        if let Some(val) = maybe_profile {
+            let valencode = &val.encoded()[1..];
+
+            if valencode.len() < 59 {
+                return Ok(None);
+            }
+
+            let cid_hex: String = hex::encode(valencode);
+
+            println!("Found CID (hex form) {:#?}", cid_hex);
+
+            let cid = String::from_utf8(valencode.to_vec())?;
+
+            println!("Found CID (string form) {:#?}", cid);
+            return Ok(Some(cid));
+        }
+
+        return Ok(None);
     }
 }
 
