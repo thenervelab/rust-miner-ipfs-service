@@ -1,5 +1,7 @@
+use crate::model::PinState;
 use anyhow::{Context, Result};
 use reqwest::Url;
+use serde_json::Deserializer;
 
 #[derive(Clone)]
 pub struct Client {
@@ -33,12 +35,14 @@ impl Client {
 
     pub async fn pin_add(&self, cid: &str) -> Result<()> {
         let url = self.base.join("/api/v0/pin/add")?;
-        self.http
+        let response = self
+            .http
             .post(url)
-            .query(&[("arg", cid), ("progress", "false")])
+            .query(&[("arg", cid), ("recursive", "true"), ("progress", "true")])
             .send()
             .await?
             .error_for_status()?;
+
         Ok(())
     }
 
@@ -51,6 +55,36 @@ impl Client {
             .await?
             .error_for_status()?;
         Ok(())
+    }
+
+    pub async fn pin_verify(&self) -> Result<Vec<PinState>> {
+        let verify_url = self.base.join("/api/v0/pin/verify")?;
+        let response_verify = self
+            .http
+            .post(verify_url)
+            .query(&[("verbose", "true")])
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let body = response_verify.text().await?;
+
+        let stream = Deserializer::from_str(&body).into_iter::<PinState>();
+
+        let mut verification: Vec<PinState> = Vec::new();
+        for obj in stream {
+            verification.push(obj?);
+        }
+
+        let mut response: Vec<PinState> = vec![];
+
+        for pin_state in verification {
+            if !pin_state.ok {
+                response.push(pin_state)
+            }
+        }
+
+        Ok(response)
     }
 
     // pub async fn pin_ls_all(&self) -> Result<HashSet<String>> {

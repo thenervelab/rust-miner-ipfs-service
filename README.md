@@ -6,7 +6,6 @@ A generated rust service that mirrors the functionality of `thenervelab/miner-ip
 - Fetch current **miner profile CID** from a Substrate-based chain (configurable pallet/storage).
 - Download **profile JSON** from IPFS (via Kubo HTTP API) and resolve list of CIDs to **pin**.
 - **Pin** new CIDs, **unpin** removed ones, track state in **SQLite**.
-- **Retry** failed operations with exponential backoff; persist failures for inspection.
 - Periodic **IPFS GC**.
 - Rich **observability** (structured logs via tracing), **CLI**, and **graceful shutdown**.
 

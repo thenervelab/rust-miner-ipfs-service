@@ -15,3 +15,31 @@ pub struct FileInfo {
     pub selected_validator: String,
     pub size_bytes: u64,
 }
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct PinState {
+    #[serde(rename = "Cid")]
+    pub cid: String,
+    #[serde(rename = "Ok")]
+    pub ok: bool,
+    #[serde(rename = "Err")]
+    pub err: Option<String>,
+    #[serde(rename = "PinStatus")]
+    pub pin_status: Option<PinStatus>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct PinStatus {
+    #[serde(rename = "BadNodes")]
+    pub bad_nodes: Option<Vec<BadNode>>,
+    #[serde(rename = "Ok")]
+    pub ok: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct BadNode {
+    #[serde(rename = "Cid")]
+    pub cid: String,
+    #[serde(rename = "Err")]
+    pub err: String,
+}

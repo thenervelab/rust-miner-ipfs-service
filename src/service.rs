@@ -1,11 +1,16 @@
 use anyhow::{Context, Result};
-
 use futures::stream::{FuturesUnordered, StreamExt};
 use sqlx::SqlitePool;
 use std::{sync::Arc, time::Duration};
 use tokio::{sync::Notify, time};
 
-use crate::{db, ipfs::Client as Ipfs, model::FileInfo, settings::Settings, substrate::Chain};
+use crate::{
+    db,
+    ipfs::Client as Ipfs,
+    model::{FileInfo, PinState},
+    settings::Settings,
+    substrate::Chain,
+};
 
 pub async fn run(cfg: Settings, pool: SqlitePool) -> Result<()> {
     let shutdown = Arc::new(Notify::new());
@@ -148,6 +153,25 @@ pub async fn reconcile_once(cfg: &Settings, pool: &SqlitePool) -> Result<()> {
             }
         });
     }
+
+    let pin_state_errors: Result<Vec<PinState>> =
+        async { ipfs.pin_verify().await.context("pin_rm") }.await;
+
+    match pin_state_errors {
+        Ok(list) => {
+            for p in list {
+                println!(
+                    "Problem with pinned CID: {}, Error: {}",
+                    p.cid,
+                    match p.err {
+                        Some(e) => e,
+                        _ => "unknown".to_string(),
+                    }
+                );
+            }
+        }
+        _ => {}
+    };
 
     Ok(())
 }
