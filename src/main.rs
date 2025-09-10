@@ -1,4 +1,5 @@
 mod db;
+mod disk;
 mod ipfs;
 mod model;
 mod service;

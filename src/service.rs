@@ -6,6 +6,7 @@ use tokio::{sync::Notify, time};
 
 use crate::{
     db,
+    disk::disk_usage,
     ipfs::Client as Ipfs,
     model::{FileInfo, PinState},
     settings::Settings,
@@ -172,6 +173,19 @@ pub async fn reconcile_once(cfg: &Settings, pool: &SqlitePool) -> Result<()> {
         }
         _ => {}
     };
+
+    let (disks, program_location_disk_usage) = match disk_usage() {
+        Ok((v, f)) => (v, f),
+        _ => (vec![], 404.0),
+    };
+
+    for i in 0..disks.len() {
+        println!(
+            "Disk {} available: {}",
+            i,
+            disks[i].0 as f64 / disks[i].1 as f64 * 100.0
+        )
+    }
 
     Ok(())
 }
