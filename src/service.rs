@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use backoff::{ExponentialBackoff, future::retry};
+
 use futures::stream::{FuturesUnordered, StreamExt};
 use sqlx::SqlitePool;
 use std::{sync::Arc, time::Duration};
@@ -73,18 +73,10 @@ pub async fn reconcile_once(cfg: &Settings, pool: &SqlitePool) -> Result<()> {
         return Ok(());
     };
 
-    // Fetch profile JSON from IPFS
-    let profile: Vec<FileInfo> = retry(backoff(&cfg), || async {
-        let p = ipfs
-            .cat_json::<Vec<FileInfo>>(&profile_cid)
-            .await
-            .context("fetch_profile");
-
-        let p = p?;
-
-        Ok(p)
-    })
-    .await?;
+    let profile: Vec<FileInfo> = ipfs
+        .cat_json::<Vec<FileInfo>>(&profile_cid)
+        .await
+        .context("fetch_profile")?;
 
     tracing::info!(pins = profile.len(), "profile_loaded");
 
@@ -105,16 +97,25 @@ pub async fn reconcile_once(cfg: &Settings, pool: &SqlitePool) -> Result<()> {
         let sem_c = sem.clone();
         tasks.push(tokio::spawn(async move {
             let _permit = sem_c.acquire().await.unwrap();
-            let res: Result<()> = retry(backoff_default(), || async {
-                ipfs.pin_add(&cid).await.context("pin_add")?;
+
+            let res: Result<()> = async {
+                match ipfs.pin_add(&cid).await.context("pin_add") {
+                    Ok(()) => {}
+                    Err(e) => {
+                        println!("Pin attempt failure {}", e);
+                    }
+                }
+
                 db::record_pin(&pool, &cid, true).await?;
                 db::mark_seen(&pool, &cid).await?;
                 Ok(())
-            })
+            }
             .await;
+
             if let Err(e) = &res {
                 let _ = db::record_failure(&pool, Some(&cid), "pin", &format!("{:?}", e)).await;
             }
+
             res
         }));
     }
@@ -131,15 +132,17 @@ pub async fn reconcile_once(cfg: &Settings, pool: &SqlitePool) -> Result<()> {
         let ipfs = ipfs.clone();
         let pool = pool.clone();
         tokio::spawn(async move {
-            let res: Result<()> = retry(backoff_default(), || async {
+            let res: Result<()> = async {
                 ipfs.pin_rm(&cid).await.context("pin_rm")?;
                 db::delete_cid(&pool, &cid).await?;
                 Ok(())
-            })
+            }
             .await;
+
             if let Err(e) = &res {
                 let _ = db::record_failure(&pool, Some(&cid), "unpin", &format!("{:?}", e)).await;
             }
+
             if let Err(e) = res {
                 tracing::error!(?e, cid, "unpin_failed");
             }
@@ -147,19 +150,4 @@ pub async fn reconcile_once(cfg: &Settings, pool: &SqlitePool) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn backoff(cfg: &Settings) -> ExponentialBackoff {
-    let mut b = backoff_default();
-    b.max_elapsed_time = Some(Duration::from_secs(cfg.service.retry_max_elapsed_secs));
-    b
-}
-
-fn backoff_default() -> ExponentialBackoff {
-    let mut b = ExponentialBackoff::default();
-    b.initial_interval = Duration::from_millis(500);
-    b.max_interval = Duration::from_secs(10);
-    b.multiplier = 1.8;
-    b.randomization_factor = 0.15;
-    b
 }
