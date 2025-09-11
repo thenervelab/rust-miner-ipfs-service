@@ -4,64 +4,17 @@ use sqlx::{Row, SqlitePool};
 
 pub async fn init(path: &str) -> Result<SqlitePool> {
     let pool = SqlitePool::connect(&format!("sqlite://{}", path)).await?;
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS pinned_cids (
-            cid TEXT PRIMARY KEY,
-            pinned_at TIMESTAMP NOT NULL,
-            last_seen_profile INTEGER NOT NULL
-        );
-    "#,
-    )
-    .execute(&pool)
-    .await?;
-
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS service_state (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            current_profile_cid TEXT,
-            updated_at TIMESTAMP NOT NULL
-        );
-    "#,
-    )
-    .execute(&pool)
-    .await?;
-
-    sqlx::query(
-        r#"
-        INSERT OR IGNORE INTO service_state (id, current_profile_cid, updated_at)
-        VALUES (1, NULL, datetime('now'))
-    "#,
-    )
-    .execute(&pool)
-    .await?;
-
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS failures (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            cid TEXT,
-            action TEXT NOT NULL, -- pin|unpin|fetch_profile
-            error TEXT NOT NULL,
-            occurred_at TIMESTAMP NOT NULL
-        );
-    "#,
-    )
-    .execute(&pool)
-    .await?;
-
+    sqlx::query(r#"CREATE TABLE IF NOT EXISTS pinned_cids (cid TEXT PRIMARY KEY,pinned_at TIMESTAMP NOT NULL,last_seen_profile INTEGER NOT NULL);"#).execute(&pool).await?;
+    sqlx::query(r#"CREATE TABLE IF NOT EXISTS service_state (id INTEGER PRIMARY KEY CHECK (id = 1),current_profile_cid TEXT,updated_at TIMESTAMP NOT NULL);"#).execute(&pool).await?;
+    sqlx::query(r#"INSERT OR IGNORE INTO service_state (id, current_profile_cid, updated_at)VALUES (1, NULL, datetime('now'))"#).execute(&pool).await?;
+    sqlx::query(r#"CREATE TABLE IF NOT EXISTS failures (id INTEGER PRIMARY KEY AUTOINCREMENT,cid TEXT,action TEXT NOT NULL,error TEXT NOT NULL,occurred_at TIMESTAMP NOT NULL);"#).execute(&pool).await?;
     Ok(pool)
 }
 
 pub async fn record_pin(pool: &SqlitePool, cid: &str, seen_now: bool) -> Result<()> {
     let now = DateTime::<Utc>::from(std::time::SystemTime::now());
     let seen = if seen_now { 1 } else { 0 };
-    sqlx::query("INSERT OR REPLACE INTO pinned_cids (cid, pinned_at, last_seen_profile) VALUES (?1, COALESCE((SELECT pinned_at FROM pinned_cids WHERE cid=?1), ?2), ?3)")
-        .bind(cid)
-        .bind(now)
-        .bind(seen)
-        .execute(pool).await?;
+    sqlx::query("INSERT OR REPLACE INTO pinned_cids (cid, pinned_at, last_seen_profile) VALUES (?1, COALESCE((SELECT pinned_at FROM pinned_cids WHERE cid=?1), ?2), ?3)").bind(cid).bind(now).bind(seen).execute(pool).await?;
     Ok(())
 }
 
@@ -118,11 +71,7 @@ pub async fn record_failure(
     action: &str,
     error: &str,
 ) -> Result<()> {
-    sqlx::query("INSERT INTO failures (cid, action, error, occurred_at) VALUES (?1, ?2, ?3, datetime('now'))")
-        .bind(cid)
-        .bind(action)
-        .bind(error)
-        .execute(pool).await?;
+    sqlx::query("INSERT INTO failures (cid, action, error, occurred_at) VALUES (?1, ?2, ?3, datetime('now'))").bind(cid).bind(action).bind(error).execute(pool).await?;
     Ok(())
 }
 

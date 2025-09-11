@@ -27,6 +27,15 @@ storage_item = "MinerProfile" # e.g., storage map (AccountId32 -> BoundedVec<u8>
 # 32-byte hex account id of the miner whose profile we track (without 0x)
 miner_profile_id = "12D3KooWDEfckrwi1YC3Pv9fqwFz8GGpW1xoVPWdu7mEGsjVwSV1"
 
+[telegram]
+bot_token = "YOUR_TELEGRAM_BOT_TOKEN" # eg. 123456789:AAG9RuJiqgOGIfFbOPBpAo6QhIJoD9mCdDs
+# chat_id = "YOUR_CHAT_ID" # chat_id is optional, autodetected if missing
+
+[gmail]
+username = "your@gmail.com"
+app_password = "your apps pass word"
+from = "your@gmail.com"
+to = "alert-recipient@example.com"
 
 # Option B — raw storage key (overrides above if set)
 # raw_storage_key_hex = "26aa394eea5630e07c48ae0c9558cef7..."

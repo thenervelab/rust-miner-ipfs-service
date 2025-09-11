@@ -4,6 +4,8 @@ use sqlx::SqlitePool;
 use std::{sync::Arc, time::Duration};
 use tokio::{sync::Notify, time};
 
+use crate::notifier::MultiNotifier;
+
 use crate::{
     db,
     disk::disk_usage,
@@ -13,7 +15,13 @@ use crate::{
     substrate::Chain,
 };
 
-pub async fn run(cfg: Settings, pool: SqlitePool) -> Result<()> {
+impl Clone for MultiNotifier {
+    fn clone(&self) -> Self {
+        MultiNotifier { notifiers: vec![] }
+    }
+}
+
+pub async fn run(cfg: Settings, pool: SqlitePool, notifier: MultiNotifier) -> Result<()> {
     let shutdown = Arc::new(Notify::new());
     {
         let s = shutdown.clone();
@@ -37,14 +45,21 @@ pub async fn run(cfg: Settings, pool: SqlitePool) -> Result<()> {
                 tracing::info!("shutdown");
                 break;
             }
-            _ = poll.tick() => {
-                if let Err(e) = update_profile_cid(&cfg, &pool, &chain).await { tracing::warn!(error=?e, "update_profile_cid_failed"); }
+            _ = poll.tick() => { if let Err(e) = update_profile_cid(&cfg, &pool, &chain).await {
+                    tracing::warn!(error=?e, "update_profile_cid_failed");
+                    notifier.notify_all("Profile update failed", &format!("{}", e)).await;
+                }
             }
             _ = reconcile.tick() => {
-                if let Err(e) = reconcile_once(&cfg, &pool).await { tracing::error!(error=?e, "reconcile_failed"); }
+                if let Err(e) = reconcile_once(&cfg, &pool, notifier.clone()).await {
+                    tracing::error!(error=?e, "reconcile_failed");
+                }
             }
             _ = gc.tick() => {
-                if let Err(e) = ipfs.gc().await { tracing::error!(error=?e, "gc_failed"); }
+                if let Err(e) = ipfs.gc().await {
+                    tracing::error!(error=?e, "gc_failed");
+                    notifier.notify_all("IPFS GC failed", &format!("{}", e)).await;
+                }
             }
         }
     }
@@ -70,7 +85,11 @@ pub async fn update_profile_cid(cfg: &Settings, pool: &SqlitePool, chain: &Chain
     Ok(())
 }
 
-pub async fn reconcile_once(cfg: &Settings, pool: &SqlitePool) -> Result<()> {
+pub async fn reconcile_once(
+    cfg: &Settings,
+    pool: &SqlitePool,
+    notifier: MultiNotifier,
+) -> Result<()> {
     let ipfs = Ipfs::new(cfg.ipfs.api_url.clone());
 
     let cid_opt = db::get_profile(pool).await?;
@@ -181,7 +200,7 @@ pub async fn reconcile_once(cfg: &Settings, pool: &SqlitePool) -> Result<()> {
 
     for i in 0..disks.len() {
         println!(
-            "Disk {} available: {}",
+            "Disk {} available space: {}%",
             i,
             disks[i].0 as f64 / disks[i].1 as f64 * 100.0
         )

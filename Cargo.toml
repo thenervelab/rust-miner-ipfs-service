@@ -2,11 +2,12 @@
 name = "miner-ipfs-service"
 version = "0.1.0"
 edition = "2024"
-license = "Apache-2.0"
-description = "Rust service that syncs IPFS pins from a Substrate-hosted miner profile CID, with SQLite state, retries, and periodic GC."
+license = "GPL-3.0"
+
 
 [dependencies]
 anyhow = "1"
+async-trait = "0.1"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -25,20 +26,29 @@ sysinfo = "0.28.0"
 # SQLite ORM/driver
 sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "macros", "chrono"] }
 
-
 # Substrate client
-subxt = { version = "0.44", default-features = false, features = ["native", "jsonrpsee"] }
-
+subxt = { version = "0.37", default-features = false, features = ["native", "jsonrpsee"] }
 
 # Futures for async streams
 futures = "0.3"
 
+# Email via Gmail (SMTP)
+lettre = { version = "0.11", features = ["tokio1-native-tls"] }
 
 # Configuration
-config = "0.14"
 figment = { version = "0.10", features = ["env", "toml", "json"] }
 serde_with = { version = "3", features = ["chrono"] }
 
 
 ctrlc = "3"
 backoff = { version = "0.4", features = ["tokio"] }
+
+
+# utilities
+futures-util = "0.3"
+bs58 = "0.4"
+
+
+[dev-dependencies]
+assert_cmd = "2"
+serial_test = "3"
