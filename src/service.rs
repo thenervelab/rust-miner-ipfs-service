@@ -51,8 +51,9 @@ pub async fn run(cfg: Settings, pool: SqlitePool, notifier: MultiNotifier) -> Re
                 }
             }
             _ = reconcile.tick() => {
-                if let Err(e) = reconcile_once(&cfg, &pool, notifier.clone()).await {
+                if let Err(e) = reconcile_once(&cfg, &pool, &notifier).await {
                     tracing::error!(error=?e, "reconcile_failed");
+                    notifier.notify_all("Profile reconcile failed", &format!("{}", e)).await;
                 }
             }
             _ = gc.tick() => {
@@ -88,7 +89,7 @@ pub async fn update_profile_cid(cfg: &Settings, pool: &SqlitePool, chain: &Chain
 pub async fn reconcile_once(
     cfg: &Settings,
     pool: &SqlitePool,
-    notifier: MultiNotifier,
+    notifier: &MultiNotifier,
 ) -> Result<()> {
     let ipfs = Ipfs::new(cfg.ipfs.api_url.clone());
 
@@ -180,14 +181,17 @@ pub async fn reconcile_once(
     match pin_state_errors {
         Ok(list) => {
             for p in list {
-                println!(
-                    "Problem with pinned CID: {}, Error: {}",
-                    p.cid,
-                    match p.err {
-                        Some(e) => e,
-                        _ => "unknown".to_string(),
-                    }
-                );
+                let e = match p.err {
+                    Some(e) => e,
+                    _ => "unknown".to_string(),
+                };
+                println!("Problem with pinned CID: {}, Error: {}", p.cid, e);
+                notifier
+                    .notify_all(
+                        "Problem with pinned CID",
+                        &format!("CID: {} error: {}", p.cid, e),
+                    )
+                    .await;
             }
         }
         _ => {}
@@ -199,11 +203,21 @@ pub async fn reconcile_once(
     };
 
     for i in 0..disks.len() {
-        println!(
-            "Disk {} available space: {}%",
-            i,
-            disks[i].0 as f64 / disks[i].1 as f64 * 100.0
-        )
+        let available = disks[i].0 as f64 / disks[i].1 as f64 * 100.0;
+
+        if available < 50.0 {
+            let gb: f64 = disks[i].1 as f64 / (1024.0 * 1024.0 * 1024.0);
+            println!("Disk {} available space: {}%", i, available);
+            notifier
+                .notify_all(
+                    &format!("Low disk space on disk {}", i),
+                    &format!(
+                        "Disk {} available space left: {:.2}% of {:.2} GB",
+                        i, available, gb
+                    ),
+                )
+                .await;
+        };
     }
 
     Ok(())

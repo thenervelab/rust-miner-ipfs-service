@@ -48,7 +48,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Run => service::run(cfg, pool, notifier).await?,
-        Commands::Reconcile => service::reconcile_once(&cfg, &pool, notifier).await?,
+        Commands::Reconcile => service::reconcile_once(&cfg, &pool, &notifier).await?,
         Commands::Gc => {
             let ipfs = ipfs::Client::new(cfg.ipfs.api_url.clone());
             ipfs.gc().await?;
