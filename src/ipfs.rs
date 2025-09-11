@@ -19,6 +19,13 @@ impl Client {
         Self { base, http }
     }
 
+    pub async fn check_health(&self) -> Result<()> {
+        let url = self.base.join("/api/v0/id")?;
+        let res = self.http.post(url).send().await?;
+
+        Ok(())
+    }
+
     pub async fn cat_json<T: for<'de> serde::Deserialize<'de>>(&self, cid: &str) -> Result<T> {
         // Try gateway first if base looks like a gateway, otherwise use /api/v0/cat
         let url = self.base.join("/api/v0/cat")?;

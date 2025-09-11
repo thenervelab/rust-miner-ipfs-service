@@ -13,6 +13,12 @@ impl Chain {
         Ok(Self { client })
     }
 
+    pub async fn check_health(&self) -> Result<()> {
+        let latest_block = self.client.blocks().at_latest().await?; // self.client.rpc().system_health().await?; 
+
+        Ok(())
+    }
+
     pub async fn fetch_profile_cid(
         &self,
         raw_storage_key_hex: Option<&str>,

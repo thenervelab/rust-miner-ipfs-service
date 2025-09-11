@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 pub struct ServiceCfg {
     pub poll_interval_secs: u64,
     pub reconcile_interval_secs: u64,
+    pub conn_check_interval_secs: u64,
     pub ipfs_gc_interval_secs: u64,
     pub max_concurrent_ipfs_ops: usize,
 }
@@ -65,6 +66,7 @@ pub async fn load(path: Option<&str>) -> Result<Settings> {
             reconcile_interval_secs: 300,
             ipfs_gc_interval_secs: 3600,
             max_concurrent_ipfs_ops: 8,
+            conn_check_interval_secs: 60,
         },
         db: DbCfg {
             path: "./miner.db".into(),

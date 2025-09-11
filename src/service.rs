@@ -15,12 +15,6 @@ use crate::{
     substrate::Chain,
 };
 
-impl Clone for MultiNotifier {
-    fn clone(&self) -> Self {
-        MultiNotifier { notifiers: vec![] }
-    }
-}
-
 pub async fn run(cfg: Settings, pool: SqlitePool, notifier: MultiNotifier) -> Result<()> {
     let shutdown = Arc::new(Notify::new());
     {
@@ -38,12 +32,24 @@ pub async fn run(cfg: Settings, pool: SqlitePool, notifier: MultiNotifier) -> Re
     let mut poll = time::interval(Duration::from_secs(cfg.service.poll_interval_secs));
     let mut reconcile = time::interval(Duration::from_secs(cfg.service.reconcile_interval_secs));
     let mut gc = time::interval(Duration::from_secs(cfg.service.ipfs_gc_interval_secs));
+    let mut health_check =
+        time::interval(Duration::from_secs(cfg.service.conn_check_interval_secs));
 
     loop {
         tokio::select! {
             _ = shutdown.notified() => {
                 tracing::info!("shutdown");
                 break;
+            }
+            _ = health_check.tick()=> {
+                if let Err(e) = ipfs.check_health().await {
+                    tracing::error!("IPFS health check failed: {:?}", e);
+                    notifier.notify_all("IPFS node connectivity check failed", &format!("IPFS node connectivity check failed: {}", e)).await;
+                }
+                if let Err(e) = chain.check_health().await {
+                    tracing::error!("Substrate health check failed: {:?}", e);
+                    notifier.notify_all("Blockchain RPC node connectivity check failed", &format!("Blockchain RPC node connectivity check failed: {}", e)).await;
+                }
             }
             _ = poll.tick() => { if let Err(e) = update_profile_cid(&cfg, &pool, &chain).await {
                     tracing::warn!(error=?e, "update_profile_cid_failed");
