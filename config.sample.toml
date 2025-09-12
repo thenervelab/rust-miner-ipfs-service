@@ -32,7 +32,7 @@ miner_profile_id = "12D3KooWDEfckrwi1YC3Pv9fqwFz8GGpW1xoVPWdu7mEGsjVwSV1"
 
 [telegram]
 bot_token = "YOUR_TELEGRAM_BOT_TOKEN" # eg. 123456789:AAG9RuJiqgOGIfFbOPBpAo6QhIJoD9mCdDs
-# chat_id = "YOUR_CHAT_ID" # chat_id is optional, autodetected if missing
+chat_id = "YOUR_CHAT_ID" 
 
 [gmail]
 username = "your@gmail.com"

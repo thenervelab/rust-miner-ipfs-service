@@ -68,8 +68,8 @@ pub struct Settings {
 pub async fn load(path: Option<&str>) -> Result<Settings> {
     let defaults = Settings {
         service: ServiceCfg {
-            poll_interval_secs: 60,
-            reconcile_interval_secs: 300,
+            poll_interval_secs: 10,
+            reconcile_interval_secs: 10,
             ipfs_gc_interval_secs: 3600,
             max_concurrent_ipfs_ops: 8,
             conn_check_interval_secs: 60,

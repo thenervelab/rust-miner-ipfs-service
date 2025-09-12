@@ -21,7 +21,7 @@ impl Client {
 
     pub async fn check_health(&self) -> Result<()> {
         let url = self.base.join("/api/v0/id")?;
-        let res = self.http.post(url).send().await?;
+        let _res = self.http.post(url).send().await?;
 
         Ok(())
     }
@@ -42,7 +42,7 @@ impl Client {
 
     pub async fn pin_add(&self, cid: &str) -> Result<()> {
         let url = self.base.join("/api/v0/pin/add")?;
-        let response = self
+        let _response = self
             .http
             .post(url)
             .query(&[("arg", cid), ("recursive", "true"), ("progress", "true")])

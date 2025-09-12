@@ -15,7 +15,7 @@ impl Chain {
     }
 
     pub async fn check_health(&self) -> Result<()> {
-        let latest_block = self.client.blocks().at_latest().await?;
+        let _latest_block = self.client.blocks().at_latest().await?;
         Ok(())
     }
 

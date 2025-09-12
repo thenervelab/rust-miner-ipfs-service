@@ -30,18 +30,30 @@ pub async fn run(cfg: Settings, pool: SqlitePool, notifier: Arc<MultiNotifier>) 
     let ipfs = Ipfs::new(cfg.ipfs.api_url.clone());
 
     if let Some(port) = cfg.monitoring.port {
+        let addr = format!("0.0.0.0:{}", port);
         let ipfs_clone = ipfs.clone();
         let chain_clone = chain.clone();
-        let notifier_clone = notifier.clone();
+        // notifier is MultiNotifier; you pass Arc<MultiNotifier> into the function
+        let notifier_arc = notifier.clone();
         let shutdown_clone = shutdown.clone();
+
+        // pull substrate config fields from cfg
+        let pallet = cfg.substrate.pallet.clone();
+        let storage_item = cfg.substrate.storage_item.clone();
+        let miner_profile_id = cfg.substrate.miner_profile_id.clone(); // Option<String>
+        let raw_storage_key_hex = cfg.substrate.raw_storage_key_hex.clone(); // Option<String>
 
         tokio::spawn(async move {
             if let Err(e) = crate::monitoring::run_health_server(
                 ipfs_clone,
                 chain_clone,
-                notifier_clone,
-                &format!("0.0.0.0:{port}"),
-                shutdown_clone, // pass shutdown signal
+                notifier_arc,
+                &addr,
+                shutdown_clone,
+                pallet,
+                storage_item,
+                miner_profile_id,
+                raw_storage_key_hex,
             )
             .await
             {
@@ -224,7 +236,7 @@ pub async fn reconcile_once(
         _ => {}
     };
 
-    let (disks, program_location_disk_usage) = match disk_usage() {
+    let (disks, _program_location_disk_usage) = match disk_usage() {
         Ok((v, f)) => (v, f),
         _ => (vec![], 404.0),
     };

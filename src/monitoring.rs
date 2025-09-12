@@ -25,6 +25,10 @@ pub async fn run_health_server(
     notifier: Arc<MultiNotifier>,
     bind_addr: &str,
     shutdown: Arc<Notify>,
+    substrate_pallet: Option<String>,
+    storage_item: Option<String>,
+    miner_account_hex: Option<String>,
+    raw_storage_key_hex: Option<String>,
 ) -> Result<()> {
     let app = Router::new().route(
         "/status",
@@ -32,6 +36,11 @@ pub async fn run_health_server(
             let ipfs = ipfs.clone();
             let chain = chain.clone();
             let notifier = notifier.clone();
+            // clone config values for the closure
+            let pallet = substrate_pallet.clone();
+            let item = storage_item.clone();
+            let miner_hex = miner_account_hex.clone();
+            let raw_key = raw_storage_key_hex.clone();
 
             move || async move {
                 // --- IPFS check ---
@@ -62,7 +71,12 @@ pub async fn run_health_server(
 
                 // --- Profile fetch ---
                 let profile_status = match chain
-                    .fetch_profile_cid(None, Some("IpfsPallet"), Some("MinerProfile"), None)
+                    .fetch_profile_cid(
+                        raw_key.as_deref(),   // raw storage key hex (Option<&str>)
+                        pallet.as_deref(),    // pallet name
+                        item.as_deref(),      // storage item name
+                        miner_hex.as_deref(), // miner account hex (Option<&str>)
+                    )
                     .await
                 {
                     Ok(Some(_)) => "OK".to_string(),
@@ -76,7 +90,9 @@ pub async fn run_health_server(
                     .into_iter()
                     .map(|res| match res {
                         Ok((name, true)) => format!("{}: OK", name),
-                        Ok((name, false)) => format!("{}: Error: notifier not configured", name),
+                        Ok((name, false)) => {
+                            format!("{}: Error: notifier not configured", name)
+                        }
                         Err(e) => format!("Error: {e:?}"),
                     })
                     .collect();

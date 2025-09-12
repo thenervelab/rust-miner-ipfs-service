@@ -15,7 +15,6 @@ pub fn disk_usage() -> Result<(Vec<(u64, u64)>, f64)> {
 
     let cwd = env::current_dir().expect("Failed to get cwd");
 
-    let mut found = false;
     for disk in sys.disks() {
         let mount_point = disk.mount_point();
         if cwd.starts_with(mount_point) {
