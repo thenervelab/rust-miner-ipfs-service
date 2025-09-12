@@ -2,6 +2,7 @@ mod db;
 mod disk;
 mod ipfs;
 mod model;
+mod monitoring;
 mod notifier;
 mod service;
 mod settings;
@@ -9,6 +10,7 @@ mod substrate;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use std::sync::Arc;
 use tracing_subscriber::{EnvFilter, fmt};
 
 #[derive(Parser, Debug)]
@@ -44,7 +46,7 @@ async fn main() -> Result<()> {
     tracing::info!(?cfg, "effective_config");
 
     let pool = db::init(&cfg.db.path).await?;
-    let notifier = notifier::build_notifier_from_config(&cfg).await?;
+    let notifier = Arc::new(notifier::build_notifier_from_config(&cfg).await?);
 
     match cli.command {
         Commands::Run => service::run(cfg, pool, notifier).await?,

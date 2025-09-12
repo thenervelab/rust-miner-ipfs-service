@@ -37,4 +37,12 @@ impl Notifier for GmailNotifier {
         self.mailer.send(email).await.context("send email")?;
         Ok(())
     }
+
+    fn name(&self) -> &'static str {
+        "gmail"
+    }
+
+    fn is_healthy(&self) -> Result<(&str, bool)> {
+        Ok((self.name(), true))
+    }
 }

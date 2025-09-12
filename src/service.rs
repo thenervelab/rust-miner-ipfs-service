@@ -15,7 +15,7 @@ use crate::{
     substrate::Chain,
 };
 
-pub async fn run(cfg: Settings, pool: SqlitePool, notifier: MultiNotifier) -> Result<()> {
+pub async fn run(cfg: Settings, pool: SqlitePool, notifier: Arc<MultiNotifier>) -> Result<()> {
     let shutdown = Arc::new(Notify::new());
     {
         let s = shutdown.clone();
@@ -28,6 +28,27 @@ pub async fn run(cfg: Settings, pool: SqlitePool, notifier: MultiNotifier) -> Re
     let chain = Chain::connect(&cfg.substrate.ws_url).await?;
 
     let ipfs = Ipfs::new(cfg.ipfs.api_url.clone());
+
+    if let Some(port) = cfg.monitoring.port {
+        let ipfs_clone = ipfs.clone();
+        let chain_clone = chain.clone();
+        let notifier_clone = notifier.clone();
+        let shutdown_clone = shutdown.clone();
+
+        tokio::spawn(async move {
+            if let Err(e) = crate::monitoring::run_health_server(
+                ipfs_clone,
+                chain_clone,
+                notifier_clone,
+                &format!("0.0.0.0:{port}"),
+                shutdown_clone, // pass shutdown signal
+            )
+            .await
+            {
+                tracing::error!("Monitoring server failed: {:?}", e);
+            }
+        });
+    }
 
     let mut poll = time::interval(Duration::from_secs(cfg.service.poll_interval_secs));
     let mut reconcile = time::interval(Duration::from_secs(cfg.service.reconcile_interval_secs));

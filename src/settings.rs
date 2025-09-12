@@ -50,6 +50,11 @@ pub struct GmailCfg {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitoringConfig {
+    pub port: Option<u16>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub service: ServiceCfg,
     pub db: DbCfg,
@@ -57,6 +62,7 @@ pub struct Settings {
     pub substrate: SubstrateCfg,
     pub telegram: TelegramCfg,
     pub gmail: GmailCfg,
+    pub monitoring: MonitoringConfig,
 }
 
 pub async fn load(path: Option<&str>) -> Result<Settings> {
@@ -92,6 +98,7 @@ pub async fn load(path: Option<&str>) -> Result<Settings> {
             from: None,
             to: None,
         },
+        monitoring: MonitoringConfig { port: Some(9090) },
     };
 
     let mut fig = Figment::from(Serialized::defaults(defaults)).merge(Env::prefixed("MINER_"));

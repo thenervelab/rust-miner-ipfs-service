@@ -3,6 +3,7 @@ use hex::FromHex;
 use subxt::dynamic::storage;
 use subxt::{OnlineClient, PolkadotConfig};
 
+#[derive(Clone)]
 pub struct Chain {
     client: OnlineClient<PolkadotConfig>,
 }
@@ -14,9 +15,12 @@ impl Chain {
     }
 
     pub async fn check_health(&self) -> Result<()> {
-        let latest_block = self.client.blocks().at_latest().await?; // self.client.rpc().system_health().await?; 
-
+        let latest_block = self.client.blocks().at_latest().await?;
         Ok(())
+    }
+
+    pub fn client(&self) -> &OnlineClient<PolkadotConfig> {
+        &self.client
     }
 
     pub async fn fetch_profile_cid(

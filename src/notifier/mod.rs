@@ -7,6 +7,8 @@ pub mod telegram;
 #[async_trait]
 pub trait Notifier: Send + Sync {
     async fn notify(&self, subject: &str, message: &str) -> Result<()>;
+    fn name(&self) -> &'static str;
+    fn is_healthy(&self) -> Result<(&str, bool)>; // you can extend this
 }
 
 pub struct MultiNotifier {
@@ -20,12 +22,21 @@ impl MultiNotifier {
     pub fn add(&mut self, n: Box<dyn Notifier>) {
         self.notifiers.push(n);
     }
+
     pub async fn notify_all(&self, subject: &str, message: &str) {
         for n in &self.notifiers {
             if let Err(e) = n.notify(subject, message).await {
                 tracing::error!("notifier failed: {:?}", e);
             }
         }
+    }
+
+    pub fn health_check(&self) -> Vec<Result<(&str, bool)>> {
+        let mut statuses = Vec::new();
+        for n in self.notifiers.iter() {
+            statuses.push(n.is_healthy());
+        }
+        statuses
     }
 }
 

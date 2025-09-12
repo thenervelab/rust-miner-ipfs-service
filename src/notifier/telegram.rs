@@ -81,4 +81,12 @@ impl Notifier for TelegramNotifier {
             .error_for_status()?;
         Ok(())
     }
+
+    fn name(&self) -> &'static str {
+        "telegram"
+    }
+
+    fn is_healthy(&self) -> Result<(&str, bool)> {
+        Ok((self.name(), true))
+    }
 }
