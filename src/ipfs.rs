@@ -86,9 +86,9 @@ impl Client {
         let mut response: Vec<PinState> = vec![];
 
         for pin_state in verification {
-            if !pin_state.ok {
-                response.push(pin_state)
-            }
+            //if !pin_state.ok {
+            response.push(pin_state)
+            //}
         }
 
         Ok(response)

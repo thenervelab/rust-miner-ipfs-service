@@ -8,6 +8,7 @@ mod service;
 mod settings;
 mod substrate;
 
+use crate::service::NotifState;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::sync::Arc;
@@ -50,7 +51,10 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Run => service::run(cfg, pool, notifier).await?,
-        Commands::Reconcile => service::reconcile_once(&cfg, &pool, &notifier).await?,
+        Commands::Reconcile => {
+            let mut notif_state = NotifState::default();
+            service::reconcile_once(&cfg, &pool, &notifier, &mut notif_state).await?
+        }
         Commands::Gc => {
             let ipfs = ipfs::Client::new(cfg.ipfs.api_url.clone());
             ipfs.gc().await?;

@@ -72,7 +72,7 @@ pub async fn load(path: Option<&str>) -> Result<Settings> {
             reconcile_interval_secs: 10,
             ipfs_gc_interval_secs: 3600,
             max_concurrent_ipfs_ops: 8,
-            conn_check_interval_secs: 60,
+            conn_check_interval_secs: 30,
         },
         db: DbCfg {
             path: "./miner.db".into(),

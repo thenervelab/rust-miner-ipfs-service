@@ -15,6 +15,49 @@ use crate::{
     substrate::Chain,
 };
 
+use std::collections::HashMap;
+
+#[derive(Default)]
+pub struct NotifState {
+    last_status: HashMap<String, bool>, // true = OK, false = error
+}
+
+impl NotifState {
+    async fn notify_change(
+        &mut self,
+        notifier: &MultiNotifier,
+        key: String,
+        is_ok: bool,
+        ok_msg: &str,
+        err_msg: &str,
+    ) {
+        let last = self.last_status.get(&key).copied();
+
+        match (last, is_ok) {
+            (Some(true), false) => {
+                notifier
+                    .notify_all(&format!("{key} failure"), err_msg)
+                    .await;
+            }
+            (Some(false), true) => {
+                notifier
+                    .notify_all(&format!("{key} recovered"), ok_msg)
+                    .await;
+            }
+            (None, false) => {
+                notifier
+                    .notify_all(&format!("{key} failure"), err_msg)
+                    .await;
+            }
+            _ => {
+                // Still OK or still failing → no spam
+            }
+        }
+
+        self.last_status.insert(key, is_ok);
+    }
+}
+
 pub async fn run(cfg: Settings, pool: SqlitePool, notifier: Arc<MultiNotifier>) -> Result<()> {
     let shutdown = Arc::new(Notify::new());
     {
@@ -26,22 +69,19 @@ pub async fn run(cfg: Settings, pool: SqlitePool, notifier: Arc<MultiNotifier>) 
     }
 
     let chain = Chain::connect(&cfg.substrate.ws_url).await?;
-
     let ipfs = Ipfs::new(cfg.ipfs.api_url.clone());
 
     if let Some(port) = cfg.monitoring.port {
         let addr = format!("0.0.0.0:{}", port);
         let ipfs_clone = ipfs.clone();
         let chain_clone = chain.clone();
-        // notifier is MultiNotifier; you pass Arc<MultiNotifier> into the function
         let notifier_arc = notifier.clone();
         let shutdown_clone = shutdown.clone();
 
-        // pull substrate config fields from cfg
         let pallet = cfg.substrate.pallet.clone();
         let storage_item = cfg.substrate.storage_item.clone();
-        let miner_profile_id = cfg.substrate.miner_profile_id.clone(); // Option<String>
-        let raw_storage_key_hex = cfg.substrate.raw_storage_key_hex.clone(); // Option<String>
+        let miner_profile_id = cfg.substrate.miner_profile_id.clone();
+        let raw_storage_key_hex = cfg.substrate.raw_storage_key_hex.clone();
 
         tokio::spawn(async move {
             if let Err(e) = crate::monitoring::run_health_server(
@@ -68,6 +108,8 @@ pub async fn run(cfg: Settings, pool: SqlitePool, notifier: Arc<MultiNotifier>) 
     let mut health_check =
         time::interval(Duration::from_secs(cfg.service.conn_check_interval_secs));
 
+    let mut notif_state = NotifState::default();
+
     loop {
         tokio::select! {
             _ = shutdown.notified() => {
@@ -83,16 +125,39 @@ pub async fn run(cfg: Settings, pool: SqlitePool, notifier: Arc<MultiNotifier>) 
                     _ = async {
                         if let Err(e) = ipfs.check_health().await {
                             tracing::error!("IPFS health check failed: {:?}", e);
-                            notifier.notify_all(
-                                "IPFS node connectivity check failed",
-                                &format!("IPFS node connectivity check failed: {}", e)
+                            notif_state.notify_change(
+                                &notifier,
+                                "ipfs".to_string(),
+                                false,
+                                "IPFS node is healthy again",
+                                &format!("IPFS node connectivity check failed: {}", e),
+                            ).await;
+                        } else {
+                            notif_state.notify_change(
+                                &notifier,
+                                "ipfs".to_string(),
+                                true,
+                                "IPFS node is healthy again",
+                                "unused",
                             ).await;
                         }
+
                         if let Err(e) = chain.check_health().await {
                             tracing::error!("Substrate health check failed: {:?}", e);
-                            notifier.notify_all(
-                                "Blockchain RPC node connectivity check failed",
-                                &format!("Blockchain RPC node connectivity check failed: {}", e)
+                            notif_state.notify_change(
+                                &notifier,
+                                "substrate".to_string(),
+                                false,
+                                "Blockchain RPC node is healthy again",
+                                &format!("Blockchain RPC node connectivity check failed: {}", e),
+                            ).await;
+                        } else {
+                            notif_state.notify_change(
+                                &notifier,
+                                "substrate".to_string(),
+                                true,
+                                "Blockchain RPC node is healthy again",
+                                "unused",
                             ).await;
                         }
                     } => {}
@@ -107,7 +172,21 @@ pub async fn run(cfg: Settings, pool: SqlitePool, notifier: Arc<MultiNotifier>) 
                     _ = async {
                         if let Err(e) = update_profile_cid(&cfg, &pool, &chain).await {
                             tracing::warn!(error=?e, "update_profile_cid_failed");
-                            notifier.notify_all("Profile update failed", &format!("{}", e)).await;
+                            notif_state.notify_change(
+                                &notifier,
+                                "profile_update".to_string(),
+                                false,
+                                "Profile update is working again",
+                                &format!("Profile update failed: {}", e),
+                            ).await;
+                        } else {
+                            notif_state.notify_change(
+                                &notifier,
+                                "profile_update".to_string(),
+                                true,
+                                "Profile update is working again",
+                                "unused",
+                            ).await;
                         }
                     } => {}
                 }
@@ -119,9 +198,23 @@ pub async fn run(cfg: Settings, pool: SqlitePool, notifier: Arc<MultiNotifier>) 
                         break;
                     }
                     _ = async {
-                        if let Err(e) = reconcile_once(&cfg, &pool, &notifier).await {
+                        if let Err(e) = reconcile_once(&cfg, &pool, &notifier, &mut notif_state).await {
                             tracing::error!(error=?e, "reconcile_failed");
-                            notifier.notify_all("Profile reconcile failed", &format!("{}", e)).await;
+                            notif_state.notify_change(
+                                &notifier,
+                                "reconcile".to_string(),
+                                false,
+                                "Reconcile is working again",
+                                &format!("Profile reconcile failed: {}", e),
+                            ).await;
+                        } else {
+                            notif_state.notify_change(
+                                &notifier,
+                                "reconcile".to_string(),
+                                true,
+                                "Reconcile is working again",
+                                "unused",
+                            ).await;
                         }
                    } => {}
                 }
@@ -135,7 +228,21 @@ pub async fn run(cfg: Settings, pool: SqlitePool, notifier: Arc<MultiNotifier>) 
                     _ = async {
                         if let Err(e) = ipfs.gc().await {
                             tracing::error!(error=?e, "gc_failed");
-                            notifier.notify_all("IPFS GC failed", &format!("{}", e)).await;
+                            notif_state.notify_change(
+                                &notifier,
+                                "ipfs_gc".to_string(),
+                                false,
+                                "IPFS GC is working again",
+                                &format!("IPFS GC failed: {}", e),
+                            ).await;
+                        } else {
+                            notif_state.notify_change(
+                                &notifier,
+                                "ipfs_gc".to_string(),
+                                true,
+                                "IPFS GC is working again",
+                                "unused",
+                            ).await;
                         }
                    } => {}
                 }
@@ -169,8 +276,11 @@ pub async fn reconcile_once(
     cfg: &Settings,
     pool: &SqlitePool,
     notifier: &MultiNotifier,
+    notif_state: &mut NotifState,
 ) -> Result<()> {
     let ipfs = Ipfs::new(cfg.ipfs.api_url.clone());
+
+    tracing::info!("Reconcile commenced");
 
     let cid_opt = db::get_profile(pool).await?;
     let Some(profile_cid) = cid_opt else {
@@ -185,12 +295,10 @@ pub async fn reconcile_once(
 
     tracing::info!(pins = profile.len(), "profile_loaded");
 
-    // Mark all unseen, then mark listed CIDs as seen
     db::mark_all_unseen(pool).await?;
 
     let desired: Vec<String> = profile.iter().map(|p| p.cid.trim().to_string()).collect();
 
-    // Pin new/ensure present
     let sem = Arc::new(tokio::sync::Semaphore::new(
         cfg.service.max_concurrent_ipfs_ops as usize,
     ));
@@ -231,7 +339,6 @@ pub async fn reconcile_once(
         }
     }
 
-    // Unpin removed
     let to_unpin = db::to_unpin(pool).await?;
     for cid in to_unpin {
         let ipfs = ipfs.clone();
@@ -260,17 +367,27 @@ pub async fn reconcile_once(
     match pin_state_errors {
         Ok(list) => {
             for p in list {
-                let e = match p.err {
-                    Some(e) => e,
-                    _ => "unknown".to_string(),
+                let e = match &p.err {
+                    Some(e) => {
+                        println!("Problem with pinned CID: {}, Error: {}", p.cid, e);
+                        e
+                    }
+                    _ => &"unknown".to_string(),
                 };
-                println!("Problem with pinned CID: {}, Error: {}", p.cid, e);
-                notifier
-                    .notify_all(
-                        "Problem with pinned CID",
-                        &format!("CID: {} error: {}", p.cid, e),
-                    )
-                    .await;
+
+                let cidm = format!("pinned_cid_err_{}", p.cid);
+                let okm = format!("Problem with pinned CID: {} error: {}", p.cid, e);
+                let errm = format!("Pinned CID OK: {}", p.cid);
+
+                if p.err.is_some() {
+                    notif_state
+                        .notify_change(&notifier, cidm, false, &okm, &errm)
+                        .await;
+                } else {
+                    notif_state
+                        .notify_change(&notifier, cidm, true, &okm, &errm)
+                        .await;
+                };
             }
         }
         _ => {}
@@ -284,20 +401,31 @@ pub async fn reconcile_once(
     for i in 0..disks.len() {
         let available = disks[i].0 as f64 / disks[i].1 as f64 * 100.0;
 
+        let gb: f64 = disks[i].1 as f64 / (1024.0 * 1024.0 * 1024.0);
+
+        let diskm = format!("disk_space_disk_{}", i);
+        let okm = format!(
+            "Disk {} available space left: {:.2}% of {:.2} GB",
+            i, available, gb
+        );
+        let errm = format!(
+            "Disk {} available space left: {:.2}% of {:.2} GB",
+            i, available, gb
+        );
+
         if available < 50.0 {
-            let gb: f64 = disks[i].1 as f64 / (1024.0 * 1024.0 * 1024.0);
             println!("Disk {} available space: {}%", i, available);
-            notifier
-                .notify_all(
-                    &format!("Low disk space on disk {}", i),
-                    &format!(
-                        "Disk {} available space left: {:.2}% of {:.2} GB",
-                        i, available, gb
-                    ),
-                )
+
+            notif_state
+                .notify_change(&notifier, diskm, false, &okm, &errm)
+                .await;
+        } else {
+            notif_state
+                .notify_change(&notifier, diskm, true, &okm, &errm)
                 .await;
         };
     }
 
+    tracing::info!("Reconcile finished");
     Ok(())
 }
