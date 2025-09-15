@@ -22,14 +22,17 @@ pub struct PinState {
     pub cid: String,
     #[serde(rename = "Ok")]
     pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "Err")]
     pub err: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "PinStatus")]
     pub pin_status: Option<PinStatus>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PinStatus {
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "BadNodes")]
     pub bad_nodes: Option<Vec<BadNode>>,
     #[serde(rename = "Ok")]

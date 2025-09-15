@@ -6,7 +6,8 @@ use std::sync::Arc;
 use tokio::{net::TcpListener, sync::Notify};
 
 use crate::{
-    disk::disk_usage, ipfs::Client as IpfsClient, notifier::MultiNotifier, substrate::Chain,
+    disk::disk_usage, ipfs::Client as IpfsClient, model::PinState, notifier::MultiNotifier,
+    substrate::Chain,
 };
 
 #[derive(Serialize)]
@@ -14,9 +15,10 @@ struct HealthStatus {
     ipfs: String,
     blockchain: String,
     disk: String,
-    pinned_content: String,
     profile: String,
     notifications: Vec<String>,
+    pin_status: String,
+    pinned_content: Vec<PinState>,
 }
 
 pub async fn run_health_server(
@@ -63,10 +65,28 @@ pub async fn run_health_server(
                 };
 
                 // --- Pin verification ---
-                let pin_status = match ipfs.pin_verify().await {
-                    Ok(pins) if pins.is_empty() => "OK".to_string(),
-                    Ok(pins) => format!("Error: {} pins failing", pins.len()),
-                    Err(e) => format!("Error: {e:?}"),
+                let (pin_status, pinned_content) = match ipfs.pin_verify().await {
+                    Ok(pins) => {
+                        let mut status: String = "Status: ".to_string();
+                        let mut all_pin_ok = true;
+                        for pin_state in &pins {
+                            if !pin_state.ok {
+                                let e = match &pin_state.err {
+                                    Some(e) => e,
+                                    _ => &"unknown".to_string(),
+                                };
+                                status.push_str(&format!("CID: {} Error: {} ", pin_state.cid, e));
+                                all_pin_ok = false;
+                            }
+                        }
+
+                        if all_pin_ok {
+                            status.push_str("OK");
+                        }
+
+                        (status, pins)
+                    }
+                    Err(e) => (format!("Internal error: {e:?}"), vec![]),
                 };
 
                 // --- Profile fetch ---
@@ -101,9 +121,10 @@ pub async fn run_health_server(
                     ipfs: ipfs_status,
                     blockchain: blockchain_status,
                     disk: disk_status,
-                    pinned_content: pin_status,
                     profile: profile_status,
                     notifications: notif_status,
+                    pin_status: pin_status,
+                    pinned_content: pinned_content,
                 })
             }
         }),
