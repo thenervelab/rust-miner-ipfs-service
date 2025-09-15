@@ -32,6 +32,8 @@ pub async fn run_health_server(
     miner_account_hex: Option<String>,
     raw_storage_key_hex: Option<String>,
 ) -> Result<()> {
+    tracing::info!("Starting monitoring server on {}", bind_addr);
+
     let app = Router::new().route(
         "/status",
         get({

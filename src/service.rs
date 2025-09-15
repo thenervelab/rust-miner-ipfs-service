@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use futures::stream::{FuturesUnordered, StreamExt};
 use sqlx::SqlitePool;
 use std::{sync::Arc, time::Duration};
-use tokio::{sync::Notify, time};
+use tokio::{sync::Notify, time, time::sleep};
 
 use crate::notifier::MultiNotifier;
 
@@ -68,8 +68,55 @@ pub async fn run(cfg: Settings, pool: SqlitePool, notifier: Arc<MultiNotifier>) 
         .expect("ctrlc");
     }
 
-    let chain = Chain::connect(&cfg.substrate.ws_url).await?;
+    let mut notif_state = NotifState::default();
+
+    tracing::info!("Connecting to IPFS node");
+
     let ipfs = Ipfs::new(cfg.ipfs.api_url.clone());
+
+    tracing::info!("Connecting to Substrate node");
+
+    let mut chain_uninited: Option<Chain> = None;
+
+    tokio::select! {
+        _ = shutdown.notified() => {
+            tracing::info!("Profile update shutting down during startup");
+            return Ok(())
+        }
+        _ = async {
+            while !chain_uninited.is_some() {
+                match Chain::connect(&cfg.substrate.ws_url).await {
+                    Ok(c) => {
+                        tracing::info!("Connected to Substrate node");
+                        chain_uninited = Some(c);
+                        notif_state.notify_change(
+                            &notifier,
+                            "substrate_connect".to_string(),
+                            true,
+                            "Blockchain RPC node connected",
+                            "unused",
+                        ).await;
+                        break;
+                    },
+                    Err(e) => {
+                        tracing::info!("Connection attempt to Substrate node failed, error: {}", e);
+                        notif_state.notify_change(
+                            &notifier,
+                            "substrate_connect".to_string(),
+                            false,
+                            "Blockchain RPC node connected",
+                            &format!("Blockchain RPC node unreachable, error: {}", e),
+                        ).await;
+
+                        // Back off ~100ms before next retry (max 10/sec)
+                        sleep(Duration::from_millis(100)).await;
+                    },
+                };
+            };
+        } => {}
+    }
+
+    let chain = chain_uninited.unwrap();
 
     if let Some(port) = cfg.monitoring.port {
         let addr = format!("0.0.0.0:{}", port);
@@ -102,13 +149,47 @@ pub async fn run(cfg: Settings, pool: SqlitePool, notifier: Arc<MultiNotifier>) 
         });
     }
 
+    tracing::info!("Commencing node operation");
+
     let mut poll = time::interval(Duration::from_secs(cfg.service.poll_interval_secs));
+    poll.tick().await;
+
     let mut reconcile = time::interval(Duration::from_secs(cfg.service.reconcile_interval_secs));
+    reconcile.tick().await;
+
     let mut gc = time::interval(Duration::from_secs(cfg.service.ipfs_gc_interval_secs));
+    gc.tick().await;
+
     let mut health_check =
         time::interval(Duration::from_secs(cfg.service.conn_check_interval_secs));
+    health_check.tick().await;
 
-    let mut notif_state = NotifState::default();
+    tokio::select! {
+        _ = shutdown.notified() => {
+            tracing::info!("Profile update shutting down during startup");
+            return Ok(())
+        }
+        _ = async {
+            if let Err(e) = update_profile_cid(&cfg, &pool, &chain).await {
+                tracing::warn!(error=?e, "update_profile_cid_failed");
+                notif_state.notify_change(
+                    &notifier,
+                    "profile_update".to_string(),
+                    false,
+                    "Profile update is working again",
+                    &format!("Profile update failed: {}", e),
+                ).await;
+            } else {
+                notif_state.notify_change(
+                    &notifier,
+                    "profile_update".to_string(),
+                    true,
+                    "Profile update is working again",
+                    "unused",
+                ).await;
+            }
+        } => {}
+    }
 
     loop {
         tokio::select! {
@@ -192,6 +273,7 @@ pub async fn run(cfg: Settings, pool: SqlitePool, notifier: Arc<MultiNotifier>) 
                 }
             }
             _ = reconcile.tick() => {
+
                 tokio::select! {
                     _ = shutdown.notified() => {
                         tracing::info!("Reconcile shutting down during tick");
@@ -255,6 +337,8 @@ pub async fn run(cfg: Settings, pool: SqlitePool, notifier: Arc<MultiNotifier>) 
 }
 
 pub async fn update_profile_cid(cfg: &Settings, pool: &SqlitePool, chain: &Chain) -> Result<()> {
+    tracing::info!("Profile CID update commenced");
+
     let cid_opt = chain
         .fetch_profile_cid(
             cfg.substrate.raw_storage_key_hex.as_deref(),
@@ -315,7 +399,7 @@ pub async fn reconcile_once(
                 match ipfs.pin_add(&cid).await.context("pin_add") {
                     Ok(()) => {}
                     Err(e) => {
-                        println!("Pin attempt failure {}", e);
+                        tracing::error!("Pin attempt failure {}", e);
                     }
                 }
 
@@ -369,7 +453,7 @@ pub async fn reconcile_once(
             for p in list {
                 let e = match &p.err {
                     Some(e) => {
-                        println!("Problem with pinned CID: {}, Error: {}", p.cid, e);
+                        tracing::error!("Problem with pinned CID: {}, Error: {}", p.cid, e);
                         e
                     }
                     _ => &"unknown".to_string(),
@@ -414,7 +498,7 @@ pub async fn reconcile_once(
         );
 
         if available < 50.0 {
-            println!("Disk {} available space: {}%", i, available);
+            tracing::warn!("Disk {} available space: {}%", i, available);
 
             notif_state
                 .notify_change(&notifier, diskm, false, &okm, &errm)

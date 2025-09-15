@@ -49,6 +49,8 @@ async fn main() -> Result<()> {
     let pool = db::init(&cfg.db.path).await?;
     let notifier = Arc::new(notifier::build_notifier_from_config(&cfg).await?);
 
+    tracing::info!("Commence {:#?}", cli.command);
+
     match cli.command {
         Commands::Run => service::run(cfg, pool, notifier).await?,
         Commands::Reconcile => {
