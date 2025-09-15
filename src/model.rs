@@ -29,7 +29,7 @@ pub struct PinState {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct PinStatus {
+pub struct PinStatus {
     #[serde(rename = "BadNodes")]
     pub bad_nodes: Option<Vec<BadNode>>,
     #[serde(rename = "Ok")]
@@ -37,7 +37,7 @@ struct PinStatus {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct BadNode {
+pub struct BadNode {
     #[serde(rename = "Cid")]
     pub cid: String,
     #[serde(rename = "Err")]

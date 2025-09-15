@@ -6,14 +6,8 @@ use reqwest::Client;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
-pub struct TelegramCfg {
-    pub bot_token: String,
-    pub chat_id: Option<String>, // now optional
-}
-
-#[derive(Debug, Deserialize)]
 struct TelegramUpdate {
-    update_id: i64,
+    //    update_id: i64,
     message: Option<TelegramMessage>,
 }
 

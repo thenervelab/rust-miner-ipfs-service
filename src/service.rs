@@ -74,32 +74,72 @@ pub async fn run(cfg: Settings, pool: SqlitePool, notifier: Arc<MultiNotifier>) 
                 tracing::info!("shutdown");
                 break;
             }
-            _ = health_check.tick()=> {
-                if let Err(e) = ipfs.check_health().await {
-                    tracing::error!("IPFS health check failed: {:?}", e);
-                    notifier.notify_all("IPFS node connectivity check failed", &format!("IPFS node connectivity check failed: {}", e)).await;
-                }
-                if let Err(e) = chain.check_health().await {
-                    tracing::error!("Substrate health check failed: {:?}", e);
-                    notifier.notify_all("Blockchain RPC node connectivity check failed", &format!("Blockchain RPC node connectivity check failed: {}", e)).await;
+            _ = health_check.tick() => {
+                tokio::select! {
+                    _ = shutdown.notified() => {
+                        tracing::info!("Health check shutting down during tick");
+                        break;
+                    }
+                    _ = async {
+                        if let Err(e) = ipfs.check_health().await {
+                            tracing::error!("IPFS health check failed: {:?}", e);
+                            notifier.notify_all(
+                                "IPFS node connectivity check failed",
+                                &format!("IPFS node connectivity check failed: {}", e)
+                            ).await;
+                        }
+                        if let Err(e) = chain.check_health().await {
+                            tracing::error!("Substrate health check failed: {:?}", e);
+                            notifier.notify_all(
+                                "Blockchain RPC node connectivity check failed",
+                                &format!("Blockchain RPC node connectivity check failed: {}", e)
+                            ).await;
+                        }
+                    } => {}
                 }
             }
-            _ = poll.tick() => { if let Err(e) = update_profile_cid(&cfg, &pool, &chain).await {
-                    tracing::warn!(error=?e, "update_profile_cid_failed");
-                    notifier.notify_all("Profile update failed", &format!("{}", e)).await;
+            _ = poll.tick() => {
+                tokio::select! {
+                    _ = shutdown.notified() => {
+                        tracing::info!("Profile update shutting down during tick");
+                        break;
+                    }
+                    _ = async {
+                        if let Err(e) = update_profile_cid(&cfg, &pool, &chain).await {
+                            tracing::warn!(error=?e, "update_profile_cid_failed");
+                            notifier.notify_all("Profile update failed", &format!("{}", e)).await;
+                        }
+                    } => {}
                 }
             }
             _ = reconcile.tick() => {
-                if let Err(e) = reconcile_once(&cfg, &pool, &notifier).await {
-                    tracing::error!(error=?e, "reconcile_failed");
-                    notifier.notify_all("Profile reconcile failed", &format!("{}", e)).await;
+                tokio::select! {
+                    _ = shutdown.notified() => {
+                        tracing::info!("Reconcile shutting down during tick");
+                        break;
+                    }
+                    _ = async {
+                        if let Err(e) = reconcile_once(&cfg, &pool, &notifier).await {
+                            tracing::error!(error=?e, "reconcile_failed");
+                            notifier.notify_all("Profile reconcile failed", &format!("{}", e)).await;
+                        }
+                   } => {}
                 }
             }
             _ = gc.tick() => {
-                if let Err(e) = ipfs.gc().await {
-                    tracing::error!(error=?e, "gc_failed");
-                    notifier.notify_all("IPFS GC failed", &format!("{}", e)).await;
+                tokio::select! {
+                    _ = shutdown.notified() => {
+                        tracing::info!("Ipfs gc shutting down during tick");
+                        break;
+                    }
+                    _ = async {
+                        if let Err(e) = ipfs.gc().await {
+                            tracing::error!(error=?e, "gc_failed");
+                            notifier.notify_all("IPFS GC failed", &format!("{}", e)).await;
+                        }
+                   } => {}
                 }
+
             }
         }
     }
