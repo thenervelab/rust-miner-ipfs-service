@@ -38,7 +38,7 @@ pub async fn run_health_server(
         "/status",
         get({
             let ipfs = ipfs.clone();
-            let chain = chain.clone();
+            let mut chain = chain.clone();
             let notifier = notifier.clone();
             // clone config values for the closure
             let pallet = substrate_pallet.clone();

@@ -116,7 +116,7 @@ pub async fn run(cfg: Settings, pool: SqlitePool, notifier: Arc<MultiNotifier>) 
         } => {}
     }
 
-    let chain = chain_uninited.unwrap();
+    let mut chain = chain_uninited.unwrap();
 
     if let Some(port) = cfg.monitoring.port {
         let addr = format!("0.0.0.0:{}", port);
@@ -170,7 +170,7 @@ pub async fn run(cfg: Settings, pool: SqlitePool, notifier: Arc<MultiNotifier>) 
             return Ok(())
         }
         _ = async {
-            if let Err(e) = update_profile_cid(&cfg, &pool, &chain).await {
+            if let Err(e) = update_profile_cid(&cfg, &pool, &mut chain).await {
                 tracing::warn!(error=?e, "update_profile_cid_failed");
                 notif_state.notify_change(
                     &notifier,
@@ -251,7 +251,7 @@ pub async fn run(cfg: Settings, pool: SqlitePool, notifier: Arc<MultiNotifier>) 
                         break;
                     }
                     _ = async {
-                        if let Err(e) = update_profile_cid(&cfg, &pool, &chain).await {
+                        if let Err(e) = update_profile_cid(&cfg, &pool, &mut chain).await {
                             tracing::warn!(error=?e, "update_profile_cid_failed");
                             notif_state.notify_change(
                                 &notifier,
@@ -336,7 +336,11 @@ pub async fn run(cfg: Settings, pool: SqlitePool, notifier: Arc<MultiNotifier>) 
     Ok(())
 }
 
-pub async fn update_profile_cid(cfg: &Settings, pool: &SqlitePool, chain: &Chain) -> Result<()> {
+pub async fn update_profile_cid(
+    cfg: &Settings,
+    pool: &SqlitePool,
+    chain: &mut Chain,
+) -> Result<()> {
     tracing::info!("Profile CID update commenced");
 
     let cid_opt = chain

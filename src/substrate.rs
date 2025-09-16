@@ -6,12 +6,16 @@ use subxt::{OnlineClient, PolkadotConfig};
 #[derive(Clone)]
 pub struct Chain {
     client: OnlineClient<PolkadotConfig>,
+    url: String,
 }
 
 impl Chain {
     pub async fn connect(ws_url: &str) -> Result<Self> {
         let client = OnlineClient::<PolkadotConfig>::from_url(ws_url).await?;
-        Ok(Self { client })
+        Ok(Self {
+            client: client,
+            url: ws_url.to_string(),
+        })
     }
 
     pub async fn check_health(&self) -> Result<()> {
@@ -24,7 +28,7 @@ impl Chain {
     }
 
     pub async fn fetch_profile_cid(
-        &self,
+        &mut self,
         raw_storage_key_hex: Option<&str>,
         pallet: Option<&str>,
         storage_item: Option<&str>,
@@ -49,6 +53,13 @@ impl Chain {
             vec![subxt::dynamic::Value::from_bytes(key_bytes)],
         );
 
+        match self.check_health().await {
+            Ok(()) => {}
+            _ => {
+                self.client = OnlineClient::<PolkadotConfig>::from_url(self.url.clone()).await?;
+            }
+        };
+
         let maybe_profile = self
             .client
             .storage()
@@ -61,16 +72,22 @@ impl Chain {
             let valencode = &val.encoded()[1..];
 
             if valencode.len() < 59 {
-                return Ok(None);
+                if valencode.len() == 46 {
+                    let cid = String::from_utf8(valencode.to_vec())?;
+                    tracing::info!("Found CID (string form) {}", cid);
+                    return Ok(Some(cid));
+                } else {
+                    return Ok(None);
+                }
             }
 
             let cid_hex: String = hex::encode(valencode);
 
-            println!("Found CID (hex form) {:#?}", cid_hex);
+            tracing::info!("Found CID (hex form) {}", cid_hex);
 
             let cid = String::from_utf8(valencode.to_vec())?;
 
-            println!("Found CID (string form) {:#?}", cid);
+            tracing::info!("Found CID (string form) {}", cid);
             return Ok(Some(cid));
         }
 
