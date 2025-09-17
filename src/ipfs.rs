@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use reqwest::Url;
 use serde_json::Deserializer;
-use std::sync::mpsc;
 
 use crate::{
     model::PinState,
@@ -46,19 +45,7 @@ impl Client {
         Ok(json)
     }
 
-    pub async fn pin_add(&self, cid: &str) -> Result<()> {
-        let url = self.base.join("/api/v0/pin/add")?;
-        self.http
-            .post(url)
-            .query(&[("arg", cid), ("recursive", "true"), ("progress", "false")])
-            .send()
-            .await?
-            .error_for_status()?;
-
-        Ok(())
-    }
-
-    pub async fn pin_add_with_progress(&self, cid: &str, mut tx: ProgressSender) -> Result<()> {
+    pub async fn pin_add_with_progress(&self, cid: &str, tx: ProgressSender) -> Result<()> {
         let url = self.base.join("/api/v0/pin/add")?;
         let resp = self
             .http

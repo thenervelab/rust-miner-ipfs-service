@@ -11,10 +11,7 @@ mod substrate;
 use crate::service::{NotifState, ProgressReceiver};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use std::{
-    collections::HashMap,
-    sync::{Arc, mpsc},
-};
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 use tracing_subscriber::{EnvFilter, fmt};
 

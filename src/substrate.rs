@@ -11,7 +11,7 @@ pub struct Chain {
 
 impl Chain {
     pub async fn connect(ws_url: &str) -> Result<Self> {
-        let client = OnlineClient::<PolkadotConfig>::from_url(ws_url.clone()).await?;
+        let client = OnlineClient::<PolkadotConfig>::from_url(ws_url).await?;
         Ok(Self {
             client: client,
             url: ws_url.to_string(),

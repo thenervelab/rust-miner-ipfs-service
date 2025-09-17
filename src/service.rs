@@ -1,11 +1,11 @@
-use anyhow::{Context, Result};
-use futures::stream::{FuturesUnordered, StreamExt};
-use sqlx::SqlitePool;
 use std::{
     collections::HashMap,
     sync::{Arc, mpsc},
     time::Duration,
 };
+
+use anyhow::{Context, Result};
+use sqlx::SqlitePool;
 
 use tokio::{
     sync::{Mutex, Notify},
@@ -321,7 +321,7 @@ pub async fn run(cfg: Settings, pool: SqlitePool, notifier: Arc<MultiNotifier>) 
                             ).await;
                         }
 
-                        if let Err(e) = update_progress_cid(&pool,&notifier, &mut notif_state, active_pins.clone()).await {
+                        if let Err(_e) = update_progress_cid(&pool,&notifier, &mut notif_state, active_pins.clone()).await {
                             //tracing::error!(error=?e, "reconcile_failed");
                             // notif_state.notify_change(
                             //     &notifier,
@@ -549,20 +549,18 @@ async fn spawn_pin_task(
 
     // Spawn the actual pinning worker
     tokio::spawn({
-        println!("\n\n Starting new cid  thread {} \n\n", cid);
-
+        tracing::info!("Starting new pin task for CID: {}", cid);
         let ipfs = ipfs.clone();
-        let active_pins = active_pins.clone();
         async move {
-            let res = ipfs.pin_add_with_progress(&cid, tx).await;
+            let _res = ipfs.pin_add_with_progress(&cid, tx).await;
         }
     });
 }
 
 pub async fn update_progress_cid(
     pool: &SqlitePool,
-    notifier: &MultiNotifier,
-    notif_state: &mut NotifState,
+    _notifier: &MultiNotifier,
+    _notif_state: &mut NotifState,
     active_pins: Arc<Mutex<HashMap<String, ProgressReceiver>>>,
 ) -> Result<()> {
     let mut active = active_pins.lock().await;
