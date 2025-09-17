@@ -1,7 +1,13 @@
-use crate::model::PinState;
 use anyhow::{Context, Result};
+use futures_util::StreamExt;
 use reqwest::Url;
 use serde_json::Deserializer;
+use std::sync::mpsc;
+
+use crate::{
+    model::PinState,
+    service::{PinProgress, ProgressSender},
+};
 
 #[derive(Clone)]
 pub struct Client {
@@ -42,13 +48,54 @@ impl Client {
 
     pub async fn pin_add(&self, cid: &str) -> Result<()> {
         let url = self.base.join("/api/v0/pin/add")?;
-        let _response = self
+        self.http
+            .post(url)
+            .query(&[("arg", cid), ("recursive", "true"), ("progress", "false")])
+            .send()
+            .await?
+            .error_for_status()?;
+
+        Ok(())
+    }
+
+    pub async fn pin_add_with_progress(&self, cid: &str, mut tx: ProgressSender) -> Result<()> {
+        let url = self.base.join("/api/v0/pin/add")?;
+        let resp = self
             .http
             .post(url)
             .query(&[("arg", cid), ("recursive", "true"), ("progress", "true")])
             .send()
             .await?
             .error_for_status()?;
+
+        let mut stream = resp.bytes_stream();
+
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(bytes) => {
+                    if let Ok(s) = String::from_utf8(bytes.to_vec()) {
+                        // IPFS progress lines are JSON like {"Pins":["cid"]} or {"Progress": 1234}
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&s) {
+                            if let Some(progress) = json.get("Progress").and_then(|v| v.as_u64()) {
+                                let _ = tx.send(PinProgress::Percent(progress));
+                            } else if let Some(pins) = json.get("Pins").and_then(|v| v.as_array()) {
+                                if !pins.is_empty() {
+                                    let _ = tx.send(PinProgress::Done);
+                                }
+                            } else {
+                                let _ = tx.send(PinProgress::Raw(s));
+                            }
+                        } else {
+                            let _ = tx.send(PinProgress::Raw(s));
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(PinProgress::Error(e.to_string()));
+                    return Err(e.into());
+                }
+            }
+        }
 
         Ok(())
     }
@@ -86,9 +133,7 @@ impl Client {
         let mut response: Vec<PinState> = vec![];
 
         for pin_state in verification {
-            //if !pin_state.ok {
             response.push(pin_state)
-            //}
         }
 
         Ok(response)

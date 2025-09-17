@@ -1,26 +1,45 @@
 use anyhow::{Context, Result};
 use futures::stream::{FuturesUnordered, StreamExt};
 use sqlx::SqlitePool;
-use std::{sync::Arc, time::Duration};
-use tokio::{sync::Notify, time, time::sleep};
+use std::{
+    collections::HashMap,
+    sync::{Arc, mpsc},
+    time::Duration,
+};
 
-use crate::notifier::MultiNotifier;
+use tokio::{
+    sync::{Mutex, Notify},
+    time,
+    time::sleep,
+};
 
 use crate::{
     db,
     disk::disk_usage,
     ipfs::Client as Ipfs,
     model::{FileInfo, PinState},
+    notifier::MultiNotifier,
     settings::Settings,
     substrate::Chain,
 };
-
-use std::collections::HashMap;
 
 #[derive(Default)]
 pub struct NotifState {
     last_status: HashMap<String, bool>, // true = OK, false = error
 }
+
+pub enum PinProgress {
+    /// Raw line from IPFS (fallback)
+    Raw(String),
+    /// Parsed percentage complete (if available)
+    Percent(u64),
+    /// Final state
+    Done,
+    Error(String),
+}
+
+pub type ProgressSender = mpsc::Sender<PinProgress>;
+pub type ProgressReceiver = mpsc::Receiver<PinProgress>;
 
 impl NotifState {
     async fn notify_change(
@@ -77,6 +96,9 @@ pub async fn run(cfg: Settings, pool: SqlitePool, notifier: Arc<MultiNotifier>) 
     tracing::info!("Connecting to Substrate node");
 
     let mut chain_uninited: Option<Chain> = None;
+
+    let active_pins: Arc<Mutex<HashMap<String, ProgressReceiver>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
     tokio::select! {
         _ = shutdown.notified() => {
@@ -280,7 +302,7 @@ pub async fn run(cfg: Settings, pool: SqlitePool, notifier: Arc<MultiNotifier>) 
                         break;
                     }
                     _ = async {
-                        if let Err(e) = reconcile_once(&cfg, &pool, &notifier, &mut notif_state).await {
+                        if let Err(e) = reconcile_once(&cfg, &pool, &notifier, &mut notif_state, active_pins.clone()).await {
                             tracing::error!(error=?e, "reconcile_failed");
                             notif_state.notify_change(
                                 &notifier,
@@ -297,6 +319,25 @@ pub async fn run(cfg: Settings, pool: SqlitePool, notifier: Arc<MultiNotifier>) 
                                 "Reconcile is working again",
                                 "unused",
                             ).await;
+                        }
+
+                        if let Err(e) = update_progress_cid(&pool,&notifier, &mut notif_state, active_pins.clone()).await {
+                            //tracing::error!(error=?e, "reconcile_failed");
+                            // notif_state.notify_change(
+                            //     &notifier,
+                            //     "reconcile".to_string(),
+                            //     false,
+                            //     "Reconcile is working again",
+                            //     &format!("Profile reconcile failed: {}", e),
+                            // ).await;
+                        } else {
+                            // notif_state.notify_change(
+                            //     &notifier,
+                            //     "reconcile".to_string(),
+                            //     true,
+                            //     "Reconcile is working again",
+                            //     "unused",
+                            // ).await;
                         }
                    } => {}
                 }
@@ -365,6 +406,7 @@ pub async fn reconcile_once(
     pool: &SqlitePool,
     notifier: &MultiNotifier,
     notif_state: &mut NotifState,
+    active_pins: Arc<Mutex<HashMap<String, ProgressReceiver>>>,
 ) -> Result<()> {
     let ipfs = Ipfs::new(cfg.ipfs.api_url.clone());
 
@@ -387,44 +429,12 @@ pub async fn reconcile_once(
 
     let desired: Vec<String> = profile.iter().map(|p| p.cid.trim().to_string()).collect();
 
-    let sem = Arc::new(tokio::sync::Semaphore::new(
-        cfg.service.max_concurrent_ipfs_ops as usize,
-    ));
-    let mut tasks = FuturesUnordered::new();
     for cid in desired.iter() {
         let cid = cid.clone();
         let ipfs = ipfs.clone();
-        let pool = pool.clone();
-        let sem_c = sem.clone();
-        tasks.push(tokio::spawn(async move {
-            let _permit = sem_c.acquire().await.unwrap();
 
-            let res: Result<()> = async {
-                match ipfs.pin_add(&cid).await.context("pin_add") {
-                    Ok(()) => {}
-                    Err(e) => {
-                        tracing::error!("Pin attempt failure {}", e);
-                    }
-                }
-
-                db::record_pin(&pool, &cid, true).await?;
-                db::mark_seen(&pool, &cid).await?;
-                Ok(())
-            }
-            .await;
-
-            if let Err(e) = &res {
-                let _ = db::record_failure(&pool, Some(&cid), "pin", &format!("{:?}", e)).await;
-            }
-
-            res
-        }));
-    }
-
-    while let Some(res) = tasks.next().await {
-        if let Err(e) = res {
-            tracing::warn!(?e, "task_join_err");
-        }
+        spawn_pin_task(ipfs, cid.clone(), &active_pins).await;
+        db::mark_seen(&pool, &cid).await?;
     }
 
     let to_unpin = db::to_unpin(pool).await?;
@@ -508,6 +518,7 @@ pub async fn reconcile_once(
                 .notify_change(&notifier, diskm, false, &okm, &errm)
                 .await;
         } else {
+            tracing::info!("Disk {} available space: {}%", i, available);
             notif_state
                 .notify_change(&notifier, diskm, true, &okm, &errm)
                 .await;
@@ -515,5 +526,86 @@ pub async fn reconcile_once(
     }
 
     tracing::info!("Reconcile finished");
+    Ok(())
+}
+
+async fn spawn_pin_task(
+    ipfs: Ipfs,
+    cid: String,
+    active_pins: &Arc<Mutex<HashMap<String, ProgressReceiver>>>,
+) {
+    let mut active = active_pins.lock().await;
+
+    // If already running, don’t start again
+    if active.contains_key(&cid) {
+        tracing::debug!("Pin task already running for CID {}", cid);
+        return;
+    }
+
+    let (tx, rx) = mpsc::channel();
+
+    // Store the receiver in the map
+    active.insert(cid.clone(), rx);
+
+    // Spawn the actual pinning worker
+    tokio::spawn({
+        println!("\n\n Starting new cid  thread {} \n\n", cid);
+
+        let ipfs = ipfs.clone();
+        let active_pins = active_pins.clone();
+        async move {
+            let res = ipfs.pin_add_with_progress(&cid, tx).await;
+        }
+    });
+}
+
+pub async fn update_progress_cid(
+    pool: &SqlitePool,
+    notifier: &MultiNotifier,
+    notif_state: &mut NotifState,
+    active_pins: Arc<Mutex<HashMap<String, ProgressReceiver>>>,
+) -> Result<()> {
+    let mut active = active_pins.lock().await;
+    let mut finished = Vec::new();
+    let mut errored = Vec::new();
+
+    tracing::info!("{} Active pins", active.len());
+
+    for (cid, rx) in active.iter_mut() {
+        let mut latest: Option<PinProgress> = None;
+
+        while let Ok(progress) = rx.try_recv() {
+            latest = Some(progress);
+        }
+
+        if let Some(p) = latest {
+            match p {
+                PinProgress::Percent(v) => {
+                    tracing::info!("CID {} progress: {} blocks", &cid[0..16], v);
+                }
+                PinProgress::Done => {
+                    tracing::info!("CID {} pin complete", &cid[0..16]);
+                    finished.push(cid.clone());
+                }
+                PinProgress::Error(e) => {
+                    tracing::error!("CID {} pin error: {}", &cid[0..16], e);
+                    let _ = db::record_failure(&pool, Some(&cid), "pin", &format!("{:?}", e)).await;
+                    errored.push(cid.clone());
+                }
+                PinProgress::Raw(line) => {
+                    tracing::debug!("CID {} raw: {}", &cid[0..16], line);
+                }
+            }
+        }
+    }
+
+    for cid in errored {
+        active.remove(&cid);
+    }
+
+    for cid in finished {
+        db::record_pin(&pool, &cid, true).await?;
+    }
+
     Ok(())
 }

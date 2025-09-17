@@ -11,15 +11,20 @@ pub struct Chain {
 
 impl Chain {
     pub async fn connect(ws_url: &str) -> Result<Self> {
-        let client = OnlineClient::<PolkadotConfig>::from_url(ws_url).await?;
+        let client = OnlineClient::<PolkadotConfig>::from_url(ws_url.clone()).await?;
         Ok(Self {
             client: client,
             url: ws_url.to_string(),
         })
     }
 
-    pub async fn check_health(&self) -> Result<()> {
-        let _latest_block = self.client.blocks().at_latest().await?;
+    pub async fn check_health(&mut self) -> Result<()> {
+        let _latest_block = match self.client.blocks().at_latest().await {
+            Ok(_) => {}
+            _ => {
+                self.client = OnlineClient::<PolkadotConfig>::from_url(self.url.clone()).await?;
+            }
+        };
         Ok(())
     }
 

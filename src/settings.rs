@@ -68,11 +68,11 @@ pub struct Settings {
 pub async fn load(path: Option<&str>) -> Result<Settings> {
     let defaults = Settings {
         service: ServiceCfg {
-            poll_interval_secs: 24,
-            reconcile_interval_secs: 24,
+            poll_interval_secs: 6,
+            reconcile_interval_secs: 6,
             ipfs_gc_interval_secs: 3600,
-            max_concurrent_ipfs_ops: 8,
-            conn_check_interval_secs: 12,
+            max_concurrent_ipfs_ops: 32,
+            conn_check_interval_secs: 6,
         },
         db: DbCfg {
             path: "./miner.db".into(),

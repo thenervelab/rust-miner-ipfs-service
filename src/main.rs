@@ -8,10 +8,14 @@ mod service;
 mod settings;
 mod substrate;
 
-use crate::service::NotifState;
+use crate::service::{NotifState, ProgressReceiver};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::{Arc, mpsc},
+};
+use tokio::sync::Mutex;
 use tracing_subscriber::{EnvFilter, fmt};
 
 #[derive(Parser, Debug)]
@@ -55,7 +59,11 @@ async fn main() -> Result<()> {
         Commands::Run => service::run(cfg, pool, notifier).await?,
         Commands::Reconcile => {
             let mut notif_state = NotifState::default();
-            service::reconcile_once(&cfg, &pool, &notifier, &mut notif_state).await?
+            let active_pins: Arc<Mutex<HashMap<String, ProgressReceiver>>> =
+                Arc::new(Mutex::new(HashMap::new()));
+            service::reconcile_once(&cfg, &pool, &notifier, &mut notif_state, active_pins).await?
+
+            // do poll progress until its done
         }
         Commands::Gc => {
             let ipfs = ipfs::Client::new(cfg.ipfs.api_url.clone());
