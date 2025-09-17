@@ -441,19 +441,20 @@ pub async fn reconcile_once(
     for cid in to_unpin {
         let ipfs = ipfs.clone();
         let pool = pool.clone();
+        let active_pins_map = active_pins.clone();
         tokio::spawn(async move {
             let res: Result<()> = async {
                 let _pin_attempt = match ipfs.pin_rm(&cid).await.context("pin_rm") {
-                    Ok() => {}
+                    Ok(()) => {}
                     Err(e) => {
-                        let pin_set = ipfs.pin_ls_all()?;
+                        let pin_set = ipfs.pin_ls_all().await?;
                         if pin_set.contains(&cid) {
                             return Err(e);
                         }
                     }
                 };
                 {
-                    let active = active_pins.lock().await;
+                    let mut active = active_pins_map.lock().await;
                     active.remove(&cid);
                 }
                 db::delete_cid(&pool, &cid).await?;

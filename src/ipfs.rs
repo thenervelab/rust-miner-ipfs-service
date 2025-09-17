@@ -1,7 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use futures_util::StreamExt;
 use reqwest::Url;
 use serde_json::Deserializer;
+use std::collections::HashSet;
 
 use crate::{
     model::PinState,
