@@ -64,21 +64,21 @@ impl Client {
                         // IPFS progress lines are JSON like {"Pins":["cid"]} or {"Progress": 1234}
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&s) {
                             if let Some(progress) = json.get("Progress").and_then(|v| v.as_u64()) {
-                                let _ = tx.send(PinProgress::Percent(progress));
+                                let _ = tx.send(PinProgress::Percent(progress))?;
                             } else if let Some(pins) = json.get("Pins").and_then(|v| v.as_array()) {
                                 if !pins.is_empty() {
-                                    let _ = tx.send(PinProgress::Done);
+                                    let _ = tx.send(PinProgress::Done)?;
                                 }
                             } else {
-                                let _ = tx.send(PinProgress::Raw(s));
+                                let _ = tx.send(PinProgress::Raw(s))?;
                             }
                         } else {
-                            let _ = tx.send(PinProgress::Raw(s));
+                            let _ = tx.send(PinProgress::Raw(s))?;
                         }
                     }
                 }
                 Err(e) => {
-                    let _ = tx.send(PinProgress::Error(e.to_string()));
+                    let _ = tx.send(PinProgress::Error(e.to_string()))?;
                     return Err(e.into());
                 }
             }
@@ -126,28 +126,28 @@ impl Client {
         Ok(response)
     }
 
-    // pub async fn pin_ls_all(&self) -> Result<HashSet<String>> {
-    //     let url = self.base.join("/api/v0/pin/ls")?;
-    //     let resp = self.http.post(url).send().await?.error_for_status()?;
-    //     let val: serde_json::Value = resp.json().await?;
-    //     let mut set = HashSet::new();
-    //     if let Some(keys) = val.get("Keys").and_then(|k| k.as_object()) {
-    //         for (cid, _obj) in keys.iter() {
-    //             set.insert(cid.to_string());
-    //         }
-    //         return Ok(set);
-    //     }
-    //     // Newer Kubo returns array format
-    //     if let Some(arr) = val.get("Pins").and_then(|a| a.as_array()) {
-    //         for v in arr {
-    //             if let Some(cid) = v.get("Cid").and_then(|c| c.as_str()) {
-    //                 set.insert(cid.to_string());
-    //             }
-    //         }
-    //         return Ok(set);
-    //     }
-    //     bail!("unexpected pin ls response: {}", val);
-    // }
+    pub async fn pin_ls_all(&self) -> Result<HashSet<String>> {
+        let url = self.base.join("/api/v0/pin/ls")?;
+        let resp = self.http.post(url).send().await?.error_for_status()?;
+        let val: serde_json::Value = resp.json().await?;
+        let mut set = HashSet::new();
+        if let Some(keys) = val.get("Keys").and_then(|k| k.as_object()) {
+            for (cid, _obj) in keys.iter() {
+                set.insert(cid.to_string());
+            }
+            return Ok(set);
+        }
+        // Newer Kubo returns array format
+        if let Some(arr) = val.get("Pins").and_then(|a| a.as_array()) {
+            for v in arr {
+                if let Some(cid) = v.get("Cid").and_then(|c| c.as_str()) {
+                    set.insert(cid.to_string());
+                }
+            }
+            return Ok(set);
+        }
+        bail!("unexpected pin ls response: {}", val);
+    }
 
     pub async fn gc(&self) -> Result<()> {
         let url = self.base.join("/api/v0/repo/gc")?;

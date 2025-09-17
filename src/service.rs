@@ -443,7 +443,19 @@ pub async fn reconcile_once(
         let pool = pool.clone();
         tokio::spawn(async move {
             let res: Result<()> = async {
-                ipfs.pin_rm(&cid).await.context("pin_rm")?;
+                let _pin_attempt = match ipfs.pin_rm(&cid).await.context("pin_rm") {
+                    Ok() => {}
+                    Err(e) => {
+                        let pin_set = ipfs.pin_ls_all()?;
+                        if pin_set.contains(&cid) {
+                            return Err(e);
+                        }
+                    }
+                };
+                {
+                    let active = active_pins.lock().await;
+                    active.remove(&cid);
+                }
                 db::delete_cid(&pool, &cid).await?;
                 Ok(())
             }
