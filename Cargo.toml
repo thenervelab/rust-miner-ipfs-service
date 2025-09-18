@@ -26,6 +26,8 @@ sysinfo = "0.28.0"
 # API Server
 axum = "0.8.4"
 
+# async-std
+async-std = "1.13"
 
 # SQLite ORM/driver
 sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "macros", "chrono"] }

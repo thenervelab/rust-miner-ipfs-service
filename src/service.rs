@@ -425,6 +425,11 @@ pub async fn reconcile_once(
 
     tracing::info!(pins = profile.len(), "profile_loaded");
 
+    let pin_list = ipfs.pin_ls_all().await?;
+    for cid in pin_list {
+        db::record_pin(&pool, &cid, true).await?;
+    }
+
     db::mark_all_unseen(pool).await?;
 
     let desired: Vec<String> = profile.iter().map(|p| p.cid.trim().to_string()).collect();
@@ -435,10 +440,13 @@ pub async fn reconcile_once(
 
         spawn_pin_task(ipfs, cid.clone(), &active_pins).await;
         db::mark_seen(&pool, &cid).await?;
+        db::record_pin(&pool, &cid, true).await?;
     }
 
     let to_unpin = db::to_unpin(pool).await?;
     for cid in to_unpin {
+        tracing::error!("Removing pin");
+
         let ipfs = ipfs.clone();
         let pool = pool.clone();
         let active_pins_map = active_pins.clone();
@@ -473,7 +481,7 @@ pub async fn reconcile_once(
     }
 
     let pin_state_errors: Result<Vec<PinState>> =
-        async { ipfs.pin_verify().await.context("pin_rm") }.await;
+        async { ipfs.pin_verify().await.context("pin_verify") }.await;
 
     match pin_state_errors {
         Ok(list) => {
@@ -612,10 +620,6 @@ pub async fn update_progress_cid(
 
     for cid in errored {
         active.remove(&cid);
-    }
-
-    for cid in finished {
-        db::record_pin(&pool, &cid, true).await?;
     }
 
     Ok(())

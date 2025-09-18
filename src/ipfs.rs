@@ -3,6 +3,7 @@ use futures_util::StreamExt;
 use reqwest::Url;
 use serde_json::Deserializer;
 use std::collections::HashSet;
+use std::time::Duration;
 
 use crate::{
     model::PinState,
@@ -35,9 +36,14 @@ impl Client {
     pub async fn cat_json<T: for<'de> serde::Deserialize<'de>>(&self, cid: &str) -> Result<T> {
         // Try gateway first if base looks like a gateway, otherwise use /api/v0/cat
         let url = self.base.join("/api/v0/cat")?;
-        let resp = self.http.post(url).query(&[("arg", cid)]).send().await;
 
-        let resp = resp?.error_for_status()?;
+        let resp = async_std::future::timeout(
+            Duration::from_secs(30),
+            self.http.post(url).query(&[("arg", cid)]).send(),
+        )
+        .await;
+
+        let resp = resp??.error_for_status()?;
 
         let body = resp.text().await?;
 
@@ -128,15 +134,20 @@ impl Client {
     }
 
     pub async fn pin_ls_all(&self) -> Result<HashSet<String>> {
-        let url = self.base.join("/api/v0/pin/ls")?;
-        let resp = self.http.post(url).send().await?.error_for_status()?;
-        let val: serde_json::Value = resp.json().await?;
         let mut set = HashSet::new();
+        let url = self.base.join("/api/v0/pin/ls")?;
+        let resp = self
+            .http
+            .post(url.clone())
+            .query(&[("type", "recursive")])
+            .send()
+            .await?
+            .error_for_status()?;
+        let val: serde_json::Value = resp.json().await?;
         if let Some(keys) = val.get("Keys").and_then(|k| k.as_object()) {
             for (cid, _obj) in keys.iter() {
                 set.insert(cid.to_string());
             }
-            return Ok(set);
         }
         // Newer Kubo returns array format
         if let Some(arr) = val.get("Pins").and_then(|a| a.as_array()) {
@@ -145,9 +156,31 @@ impl Client {
                     set.insert(cid.to_string());
                 }
             }
-            return Ok(set);
         }
-        bail!("unexpected pin ls response: {}", val);
+
+        let resp = self
+            .http
+            .post(url)
+            .query(&[("type", "direct")])
+            .send()
+            .await?
+            .error_for_status()?;
+        let val: serde_json::Value = resp.json().await?;
+        if let Some(keys) = val.get("Keys").and_then(|k| k.as_object()) {
+            for (cid, _obj) in keys.iter() {
+                set.insert(cid.to_string());
+            }
+        }
+        // Newer Kubo returns array format
+        if let Some(arr) = val.get("Pins").and_then(|a| a.as_array()) {
+            for v in arr {
+                if let Some(cid) = v.get("Cid").and_then(|c| c.as_str()) {
+                    set.insert(cid.to_string());
+                }
+            }
+        }
+
+        Ok(set)
     }
 
     pub async fn gc(&self) -> Result<()> {
