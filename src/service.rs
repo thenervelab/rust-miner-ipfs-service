@@ -5,7 +5,6 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use sqlx::SqlitePool;
 
 use tokio::{
     sync::{Mutex, Notify},
@@ -14,7 +13,7 @@ use tokio::{
 };
 
 use crate::{
-    db,
+    db::CidPool,
     disk::disk_usage,
     ipfs::Client as Ipfs,
     model::{FileInfo, PinState},
@@ -77,7 +76,7 @@ impl NotifState {
     }
 }
 
-pub async fn run(cfg: Settings, pool: SqlitePool, notifier: Arc<MultiNotifier>) -> Result<()> {
+pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>) -> Result<()> {
     let shutdown = Arc::new(Notify::new());
     {
         let s = shutdown.clone();
@@ -321,7 +320,7 @@ pub async fn run(cfg: Settings, pool: SqlitePool, notifier: Arc<MultiNotifier>) 
                             ).await;
                         }
 
-                        if let Err(_e) = update_progress_cid(&pool,&notifier, &mut notif_state, active_pins.clone()).await {
+                        if let Err(_e) = update_progress_cid(&pool, &notifier, &mut notif_state, active_pins.clone()).await {
                             //tracing::error!(error=?e, "reconcile_failed");
                             // notif_state.notify_change(
                             //     &notifier,
@@ -379,7 +378,7 @@ pub async fn run(cfg: Settings, pool: SqlitePool, notifier: Arc<MultiNotifier>) 
 
 pub async fn update_profile_cid(
     cfg: &Settings,
-    pool: &SqlitePool,
+    pool: &Arc<CidPool>,
     chain: &mut Chain,
 ) -> Result<()> {
     tracing::info!("Profile CID update commenced");
@@ -393,17 +392,17 @@ pub async fn update_profile_cid(
         )
         .await?;
 
-    let old = db::get_profile(pool).await?;
+    let old = pool.get_profile()?;
     if cid_opt != old {
         tracing::info!(old=?old, new=?cid_opt, "profile_cid_changed");
-        db::set_profile(pool, cid_opt.as_deref()).await?;
+        pool.set_profile(cid_opt.as_deref())?;
     }
     Ok(())
 }
 
 pub async fn reconcile_once(
     cfg: &Settings,
-    pool: &SqlitePool,
+    pool: &Arc<CidPool>,
     notifier: &MultiNotifier,
     notif_state: &mut NotifState,
     active_pins: Arc<Mutex<HashMap<String, ProgressReceiver>>>,
@@ -412,7 +411,7 @@ pub async fn reconcile_once(
 
     tracing::info!("Reconcile commenced");
 
-    let cid_opt = db::get_profile(pool).await?;
+    let cid_opt = pool.get_profile()?;
     let Some(profile_cid) = cid_opt else {
         tracing::warn!("no_profile_cid_set_yet");
         return Ok(());
@@ -426,24 +425,18 @@ pub async fn reconcile_once(
     tracing::info!(pins = profile.len(), "profile_loaded");
 
     let pin_list = ipfs.pin_ls_all().await?;
-    for cid in pin_list {
-        db::record_pin(&pool, &cid, true).await?;
-    }
-
-    db::mark_all_unseen(pool).await?;
+    let _ = pool.merge_pins(&pin_list); // all top level pins are added to database to keep track of unnecessary pins
 
     let desired: Vec<String> = profile.iter().map(|p| p.cid.trim().to_string()).collect();
 
     for cid in desired.iter() {
         let cid = cid.clone();
         let ipfs = ipfs.clone();
-
         spawn_pin_task(ipfs, cid.clone(), &active_pins).await;
-        db::mark_seen(&pool, &cid).await?;
-        db::record_pin(&pool, &cid, true).await?;
     }
 
-    let to_unpin = db::to_unpin(pool).await?;
+    let to_unpin = pool.sync_pins(desired)?;
+
     for cid in to_unpin {
         tracing::error!("Removing pin");
 
@@ -465,13 +458,13 @@ pub async fn reconcile_once(
                     let mut active = active_pins_map.lock().await;
                     active.remove(&cid);
                 }
-                db::delete_cid(&pool, &cid).await?;
+
                 Ok(())
             }
             .await;
 
             if let Err(e) = &res {
-                let _ = db::record_failure(&pool, Some(&cid), "unpin", &format!("{:?}", e)).await;
+                let _ = pool.record_failure(Some(&cid), "unpin", &format!("{:?}", e));
             }
 
             if let Err(e) = res {
@@ -579,7 +572,7 @@ async fn spawn_pin_task(
 }
 
 pub async fn update_progress_cid(
-    pool: &SqlitePool,
+    pool: &Arc<CidPool>,
     _notifier: &MultiNotifier,
     _notif_state: &mut NotifState,
     active_pins: Arc<Mutex<HashMap<String, ProgressReceiver>>>,
@@ -608,7 +601,7 @@ pub async fn update_progress_cid(
                 }
                 PinProgress::Error(e) => {
                     tracing::error!("CID {} pin error: {}", &cid[0..16], e);
-                    let _ = db::record_failure(&pool, Some(&cid), "pin", &format!("{:?}", e)).await;
+                    let _ = pool.record_failure(Some(&cid), "pin", &format!("{:?}", e));
                     errored.push(cid.clone());
                 }
                 PinProgress::Raw(line) => {

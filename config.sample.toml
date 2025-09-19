@@ -7,7 +7,7 @@ ipfs_gc_interval_secs = 3600
 
 
 [db]
-path = "./miner.db"
+path = "./miner_db_pool"
 
 
 [ipfs]

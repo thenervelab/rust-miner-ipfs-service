@@ -1,92 +1,223 @@
 use anyhow::Result;
-use chrono::{DateTime, Utc};
-use sqlx::{Row, SqlitePool};
+use bincode::{
+    config,
+    serde::{decode_from_slice, encode_to_vec},
+};
+use parity_db::{Db, Options};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashSet,
+    fs,
+    path::{Path, PathBuf},
+};
 
-pub async fn init(path: &str) -> Result<SqlitePool> {
-    let pool = SqlitePool::connect(&format!("sqlite://{}", path)).await?;
-    sqlx::query(r#"CREATE TABLE IF NOT EXISTS pinned_cids (cid TEXT PRIMARY KEY,pinned_at TIMESTAMP NOT NULL,last_seen_profile INTEGER NOT NULL);"#).execute(&pool).await?;
-    sqlx::query(r#"CREATE TABLE IF NOT EXISTS service_state (id INTEGER PRIMARY KEY CHECK (id = 1),current_profile_cid TEXT,updated_at TIMESTAMP NOT NULL);"#).execute(&pool).await?;
-    sqlx::query(r#"INSERT OR IGNORE INTO service_state (id, current_profile_cid, updated_at)VALUES (1, NULL, datetime('now'))"#).execute(&pool).await?;
-    sqlx::query(r#"CREATE TABLE IF NOT EXISTS failures (id INTEGER PRIMARY KEY AUTOINCREMENT,cid TEXT,action TEXT NOT NULL,error TEXT NOT NULL,occurred_at TIMESTAMP NOT NULL);"#).execute(&pool).await?;
-    Ok(pool)
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PinRecord {
+    pub last_progress_at: u64,
+    pub total_blocks: u64,
+    pub sync_complete: bool,
 }
 
-pub async fn record_pin(pool: &SqlitePool, cid: &str, seen_now: bool) -> Result<()> {
-    let now = DateTime::<Utc>::from(std::time::SystemTime::now());
-    let seen = if seen_now { 1 } else { 0 };
-    sqlx::query("INSERT OR REPLACE INTO pinned_cids (cid, pinned_at, last_seen_profile) VALUES (?1, COALESCE((SELECT pinned_at FROM pinned_cids WHERE cid=?1), ?2), ?3)").bind(cid).bind(now).bind(seen).execute(pool).await?;
-    Ok(())
+pub struct CidPool {
+    db: parity_db::Db,
 }
 
-pub async fn mark_all_unseen(pool: &SqlitePool) -> Result<()> {
-    sqlx::query("UPDATE pinned_cids SET last_seen_profile = 0")
-        .execute(pool)
-        .await?;
-    Ok(())
-}
+impl CidPool {
+    /// Initialize the database with 3 columns:
+    /// 0 = pins, 1 = service profile, 2 = failures
+    pub fn init(path: &str) -> Result<Self> {
+        let mut db_path = PathBuf::from(path);
 
-pub async fn mark_seen(pool: &SqlitePool, cid: &str) -> Result<()> {
-    sqlx::query("UPDATE pinned_cids SET last_seen_profile = 1 WHERE cid=?1")
-        .bind(cid)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
+        // If the path looks like a file (has an extension), normalize to a directory
+        if db_path.extension().is_some() {
+            let mut new_path = db_path.clone();
+            let ext = new_path.extension().unwrap().to_string_lossy().into_owned();
+            new_path.set_extension(""); // strip extension
+            let dir_name = format!("{}_dir", ext);
+            db_path = new_path.with_file_name(format!(
+                "{}_{}",
+                new_path.file_name().unwrap().to_string_lossy(),
+                dir_name
+            ));
+        }
 
-pub async fn to_unpin(pool: &SqlitePool) -> Result<Vec<String>> {
-    let rows = sqlx::query("SELECT cid FROM pinned_cids WHERE last_seen_profile = 0")
-        .fetch_all(pool)
-        .await?;
-    Ok(rows.into_iter().map(|r| r.get::<String, _>(0)).collect())
-}
+        // Ensure parent dir exists
+        if let Some(parent) = db_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
 
-pub async fn delete_cid(pool: &SqlitePool, cid: &str) -> Result<()> {
-    sqlx::query("DELETE FROM pinned_cids WHERE cid=?1")
-        .bind(cid)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
+        let mut opts = Options::with_columns(&db_path, 3);
 
-pub async fn set_profile(pool: &SqlitePool, cid: Option<&str>) -> Result<()> {
-    sqlx::query(
-        "UPDATE service_state SET current_profile_cid=?1, updated_at=datetime('now') WHERE id=1",
-    )
-    .bind(cid)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
+        opts.columns[0].btree_index = true; // pins → need iteration
+        opts.columns[1].btree_index = false; // profile → single key only
+        opts.columns[2].btree_index = true; // failures → useful to iterate logs
 
-pub async fn get_profile(pool: &SqlitePool) -> Result<Option<String>> {
-    let row = sqlx::query("SELECT current_profile_cid FROM service_state WHERE id=1")
-        .fetch_one(pool)
-        .await?;
-    Ok(row.try_get::<Option<String>, _>(0).ok().flatten())
-}
+        // Try to open existing DB
+        match Db::open(&opts) {
+            Ok(db) => Ok(Self { db }),
+            Err(e) => {
+                eprintln!("Failed to open DB at {:?}: {}. Recreating...", db_path, e);
 
-pub async fn record_failure(
-    pool: &SqlitePool,
-    cid: Option<&str>,
-    action: &str,
-    error: &str,
-) -> Result<()> {
-    sqlx::query("INSERT INTO failures (cid, action, error, occurred_at) VALUES (?1, ?2, ?3, datetime('now'))").bind(cid).bind(action).bind(error).execute(pool).await?;
-    Ok(())
-}
+                if db_path.exists() {
+                    fs::remove_dir_all(&db_path)?;
+                }
+                fs::create_dir_all(&db_path)?;
 
-pub async fn show_state(pool: &SqlitePool) -> Result<()> {
-    let prof = get_profile(pool).await?;
-    println!("current_profile: {:?}", prof);
-    let rows = sqlx::query("SELECT cid, pinned_at FROM pinned_cids ORDER BY pinned_at DESC")
-        .fetch_all(pool)
-        .await?;
-    for r in rows {
-        println!(
-            "pinned: {} at {}",
-            r.get::<String, _>(0),
-            r.get::<String, _>(1)
-        );
+                let mut opts = Options::with_columns(&db_path, 3);
+
+                opts.columns[0].btree_index = true; // pins → need iteration
+                opts.columns[1].btree_index = false; // profile → single key only
+                opts.columns[2].btree_index = true; // failures → useful to iterate logs
+
+                let db = Db::open_or_create(&opts)?;
+                Ok(Self { db })
+            }
+        }
     }
-    Ok(())
+
+    pub fn put_pin(&self, cid: &str, rec: &PinRecord) -> Result<()> {
+        let key = cid.as_bytes();
+        let value = encode_to_vec(rec, config::standard())?;
+        self.db.commit([(0, key, Some(value))])?;
+        Ok(())
+    }
+
+    pub fn get_pin(&self, cid: &str) -> Result<Option<PinRecord>> {
+        if let Some(val) = self.db.get(0, cid.as_bytes())? {
+            let (rec, _len): (PinRecord, usize) = decode_from_slice(&val, config::standard())?;
+            Ok(Some(rec))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Delete a pin record
+    pub fn del_pin(&self, cid: &str) -> Result<()> {
+        self.db.commit([(0, cid.as_bytes(), None)])?;
+        Ok(())
+    }
+
+    /// Save current profile
+    pub fn set_profile(&self, cid: Option<&str>) -> Result<()> {
+        let value = cid.map(|c| c.as_bytes().to_vec());
+        self.db.commit([(1, b"profile", value)])?;
+        Ok(())
+    }
+
+    /// Get current profile
+    pub fn get_profile(&self) -> Result<Option<String>> {
+        if let Some(val) = self.db.get(1, b"profile")? {
+            Ok(Some(String::from_utf8(val)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Record a failure
+    pub fn record_failure(&self, cid: Option<&str>, action: &str, error: &str) -> Result<()> {
+        let ts = chrono::Utc::now().timestamp_millis().to_be_bytes();
+        let mut key = b"fail_".to_vec();
+        key.extend_from_slice(&ts);
+
+        #[derive(Serialize, Deserialize)]
+        struct Failure {
+            cid: Option<String>,
+            action: String,
+            error: String,
+            occurred_at: i64,
+        }
+
+        let f = Failure {
+            cid: cid.map(|c| c.to_string()),
+            action: action.to_string(),
+            error: error.to_string(),
+            occurred_at: chrono::Utc::now().timestamp(),
+        };
+
+        let value = encode_to_vec(&f, config::standard())?;
+        let key = format!("failure-{}", f.cid.clone().unwrap_or_default());
+        self.db.commit([(1, key.as_bytes(), Some(value))])?;
+        Ok(())
+    }
+
+    pub fn sync_pins(&self, cids: Vec<String>) -> Result<Vec<String>> {
+        let desired: HashSet<String> = cids.into_iter().collect();
+
+        // Collect all current pins
+        let mut current = HashSet::new();
+        let mut iter = self.db.iter(0)?;
+        while let Some((key, _val)) = iter.next()? {
+            let cid = String::from_utf8(key)?;
+            current.insert(cid);
+        }
+
+        let to_add: Vec<String> = desired.difference(&current).cloned().collect();
+        let to_del: Vec<String> = current.difference(&desired).cloned().collect();
+
+        for cid in to_add {
+            let rec = PinRecord {
+                last_progress_at: chrono::Utc::now().timestamp() as u64,
+                total_blocks: 0,
+                sync_complete: false,
+            };
+            self.put_pin(&cid, &rec)?;
+        }
+
+        let mut vec_unpin: Vec<String> = vec![];
+
+        // Delete pins not in desired list
+        for cid in to_del {
+            self.del_pin(&cid)?;
+            vec_unpin.push(cid);
+        }
+
+        Ok(vec_unpin)
+    }
+
+    pub fn merge_pins(&self, cids: &HashSet<String>) -> anyhow::Result<()> {
+        use std::collections::HashSet;
+
+        // Convert input list into a set for efficient lookup
+
+        // Collect existing pins
+        let mut existing = HashSet::new();
+        let mut iter = self.db.iter(0)?;
+        while let Some((key, _)) = iter.next()? {
+            existing.insert(String::from_utf8(key)?);
+        }
+
+        // Add only the missing ones
+        for cid in cids.difference(&existing) {
+            let rec = PinRecord {
+                last_progress_at: chrono::Utc::now().timestamp() as u64,
+                total_blocks: 0,
+                sync_complete: false,
+            };
+            self.put_pin(cid, &rec)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn show_state(&self) -> anyhow::Result<()> {
+        // current profile, if you have that stored separately
+        if let Some(prof) = self.get_profile()? {
+            println!("current_profile: {:?}", prof);
+        } else {
+            println!("current_profile: None");
+        }
+
+        // iterate through all pinned CIDs
+        let mut iter = self.db.iter(0)?;
+        while let Some((key, val)) = iter.next()? {
+            let cid = String::from_utf8(key.to_vec())?;
+            let (rec, _): (PinRecord, usize) = decode_from_slice(&val, config::standard())?;
+            println!(
+                "pinned: {} total blocks: {} progress at: {} complete: {}",
+                cid, rec.total_blocks, rec.last_progress_at, rec.sync_complete
+            );
+        }
+
+        Ok(())
+    }
 }

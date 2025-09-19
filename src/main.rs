@@ -8,7 +8,10 @@ mod service;
 mod settings;
 mod substrate;
 
-use crate::service::{NotifState, ProgressReceiver};
+use crate::{
+    db::CidPool,
+    service::{NotifState, ProgressReceiver},
+};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::{collections::HashMap, sync::Arc};
@@ -47,7 +50,13 @@ async fn main() -> Result<()> {
     let cfg = settings::load(cli.config.as_deref()).await?;
     tracing::info!(?cfg, "effective_config");
 
-    let pool = db::init(&cfg.db.path).await?;
+    let pool_location = match cfg.db.path {
+        ref path => path,
+        _ => "./pool.db",
+    };
+
+    let pool = Arc::new(CidPool::init(&pool_location)?);
+
     let notifier = Arc::new(notifier::build_notifier_from_config(&cfg).await?);
 
     tracing::info!("Commence {:#?}", cli.command);
@@ -67,7 +76,7 @@ async fn main() -> Result<()> {
             ipfs.gc().await?;
             tracing::info!("gc_done");
         }
-        Commands::ShowState => db::show_state(&pool).await?,
+        Commands::ShowState => pool.show_state()?,
     }
 
     Ok(())
