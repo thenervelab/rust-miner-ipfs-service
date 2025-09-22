@@ -115,7 +115,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
     let pending_pins: PinSet = Arc::new(Mutex::new(HashSet::new()));
     let stalled_pins: PinSet = Arc::new(Mutex::new(HashSet::new()));
 
-    let concurrency = Arc::new(Semaphore::new(8)); // start with 8
+    let concurrency = Arc::new(Semaphore::new(32));
 
     tokio::select! {
         _ = shutdown.notified() => {
@@ -736,7 +736,7 @@ pub async fn update_progress_cid(
                     .notify_change(
                         &notifier,
                         format!("Stalled progress {}", cid),
-                        true,
+                        false,
                         "unused",
                         &format!("Task {} stalling", cid),
                     )

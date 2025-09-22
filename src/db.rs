@@ -275,10 +275,11 @@ impl CidPool {
                 }
             }
 
-            if !rec.sync_complete && rec.last_progress_at > 0 {
-                if now.saturating_sub(rec.last_progress_at) > 90 {
-                    stale.insert(cid.clone());
-                }
+            if !rec.sync_complete
+                && rec.last_progress_at > 0
+                && now.saturating_sub(rec.last_progress_at) > 120
+            {
+                stale.insert(cid.clone());
             }
 
             let value = encode_to_vec(&rec, config::standard())?;
