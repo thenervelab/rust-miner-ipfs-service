@@ -26,7 +26,7 @@ impl MultiNotifier {
     pub async fn notify_all(&self, subject: &str, message: &str) {
         for n in &self.notifiers {
             if let Err(e) = n.notify(subject, message).await {
-                tracing::error!("notifier failed: {:?}", e);
+                tracing::error!("notifier failed: {:?} {} {}", e, subject, message);
             }
         }
     }

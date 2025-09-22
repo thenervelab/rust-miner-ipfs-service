@@ -24,14 +24,14 @@ use crate::{
 
 #[derive(Default)]
 pub struct NotifState {
-    last_status: HashMap<String, bool>, // true = OK, false = error
+    last_status: Arc<Mutex<HashMap<String, bool>>>, // true = OK, false = error
 }
 
 pub enum PinProgress {
     /// Raw line from IPFS (fallback)
     Raw(String),
-    /// Parsed percentage complete (if available)
-    Percent(u64),
+    /// Parsed blocks retrieved
+    Blocks(u64),
     /// Final state
     Done,
     Error(String),
@@ -43,36 +43,45 @@ pub type ProgressReceiver = mpsc::Receiver<PinProgress>;
 impl NotifState {
     async fn notify_change(
         &mut self,
-        notifier: &MultiNotifier,
+        notifier: &Arc<MultiNotifier>,
         key: String,
         is_ok: bool,
         ok_msg: &str,
         err_msg: &str,
     ) {
-        let last = self.last_status.get(&key).copied();
+        let ok_msg = ok_msg.to_owned();
+        let err_msg = err_msg.to_owned();
+        let notifier = notifier.clone();
+        let last_status = self.last_status.clone();
 
-        match (last, is_ok) {
-            (Some(true), false) => {
-                notifier
-                    .notify_all(&format!("{key} failure"), err_msg)
-                    .await;
-            }
-            (Some(false), true) => {
-                notifier
-                    .notify_all(&format!("{key} recovered"), ok_msg)
-                    .await;
-            }
-            (None, false) => {
-                notifier
-                    .notify_all(&format!("{key} failure"), err_msg)
-                    .await;
-            }
-            _ => {
-                // Still OK or still failing → no spam
-            }
+        let last;
+        {
+            last = last_status.lock().await.get(&key).copied();
         }
+        tokio::spawn(async move {
+            match (last, is_ok) {
+                (Some(true), false) => {
+                    notifier
+                        .notify_all(&format!("{key} failure"), &err_msg)
+                        .await;
+                }
+                (Some(false), true) => {
+                    notifier
+                        .notify_all(&format!("{key} recovered"), &ok_msg)
+                        .await;
+                }
+                (None, false) => {
+                    notifier
+                        .notify_all(&format!("{key} failure"), &err_msg)
+                        .await;
+                }
+                _ => {
+                    // Still OK or still failing → no spam
+                }
+            }
 
-        self.last_status.insert(key, is_ok);
+            last_status.lock().await.insert(key, is_ok);
+        });
     }
 }
 
@@ -86,7 +95,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
         .expect("ctrlc");
     }
 
-    let mut notif_state = NotifState::default();
+    let mut notif_state = Arc::new(Mutex::new(NotifState::default()));
 
     tracing::info!("Connecting to IPFS node");
 
@@ -110,24 +119,26 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                     Ok(c) => {
                         tracing::info!("Connected to Substrate node");
                         chain_uninited = Some(c);
-                        notif_state.notify_change(
+                        {
+                            notif_state.lock().await.notify_change(
                             &notifier,
                             "substrate_connect".to_string(),
                             true,
                             "Blockchain RPC node connected",
                             "unused",
                         ).await;
+                            }
                         break;
                     },
                     Err(e) => {
                         tracing::info!("Connection attempt to Substrate node failed, error: {}", e);
-                        notif_state.notify_change(
+                        { notif_state.lock().await.notify_change(
                             &notifier,
                             "substrate_connect".to_string(),
                             false,
                             "Blockchain RPC node connected",
                             &format!("Blockchain RPC node unreachable, error: {}", e),
-                        ).await;
+                        ).await;}
 
                         // Back off ~100ms before next retry (max 10/sec)
                         sleep(Duration::from_millis(100)).await;
@@ -185,6 +196,9 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
         time::interval(Duration::from_secs(cfg.service.conn_check_interval_secs));
     health_check.tick().await;
 
+    // reset last_progress_at values to current time so that node downtime does not trigger stalled progress detection
+    let reset_progress_at = pool.touch_all_progress();
+
     tokio::select! {
         _ = shutdown.notified() => {
             tracing::info!("Profile update shutting down during startup");
@@ -193,7 +207,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
         _ = async {
             if let Err(e) = update_profile_cid(&cfg, &pool, &mut chain).await {
                 tracing::warn!(error=?e, "update_profile_cid_failed");
-                notif_state.notify_change(
+                 notif_state.lock().await.notify_change(
                     &notifier,
                     "profile_update".to_string(),
                     false,
@@ -201,7 +215,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                     &format!("Profile update failed: {}", e),
                 ).await;
             } else {
-                notif_state.notify_change(
+                 notif_state.lock().await.notify_change(
                     &notifier,
                     "profile_update".to_string(),
                     true,
@@ -227,7 +241,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                     _ = async {
                         if let Err(e) = ipfs.check_health().await {
                             tracing::error!("IPFS health check failed: {:?}", e);
-                            notif_state.notify_change(
+                             notif_state.lock().await.notify_change(
                                 &notifier,
                                 "ipfs".to_string(),
                                 false,
@@ -235,7 +249,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                                 &format!("IPFS node connectivity check failed: {}", e),
                             ).await;
                         } else {
-                            notif_state.notify_change(
+                             notif_state.lock().await.notify_change(
                                 &notifier,
                                 "ipfs".to_string(),
                                 true,
@@ -246,7 +260,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
 
                         if let Err(e) = chain.check_health().await {
                             tracing::error!("Substrate health check failed: {:?}", e);
-                            notif_state.notify_change(
+                             notif_state.lock().await.notify_change(
                                 &notifier,
                                 "substrate".to_string(),
                                 false,
@@ -254,7 +268,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                                 &format!("Blockchain RPC node connectivity check failed: {}", e),
                             ).await;
                         } else {
-                            notif_state.notify_change(
+                             notif_state.lock().await.notify_change(
                                 &notifier,
                                 "substrate".to_string(),
                                 true,
@@ -274,7 +288,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                     _ = async {
                         if let Err(e) = update_profile_cid(&cfg, &pool, &mut chain).await {
                             tracing::warn!(error=?e, "update_profile_cid_failed");
-                            notif_state.notify_change(
+                             notif_state.lock().await.notify_change(
                                 &notifier,
                                 "profile_update".to_string(),
                                 false,
@@ -282,7 +296,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                                 &format!("Profile update failed: {}", e),
                             ).await;
                         } else {
-                            notif_state.notify_change(
+                             notif_state.lock().await.notify_change(
                                 &notifier,
                                 "profile_update".to_string(),
                                 true,
@@ -303,7 +317,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                     _ = async {
                         if let Err(e) = reconcile_once(&cfg, &pool, &notifier, &mut notif_state, active_pins.clone()).await {
                             tracing::error!(error=?e, "reconcile_failed");
-                            notif_state.notify_change(
+                             notif_state.lock().await.notify_change(
                                 &notifier,
                                 "reconcile".to_string(),
                                 false,
@@ -311,7 +325,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                                 &format!("Profile reconcile failed: {}", e),
                             ).await;
                         } else {
-                            notif_state.notify_change(
+                             notif_state.lock().await.notify_change(
                                 &notifier,
                                 "reconcile".to_string(),
                                 true,
@@ -320,23 +334,8 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                             ).await;
                         }
 
-                        if let Err(_e) = update_progress_cid(&pool, &notifier, &mut notif_state, active_pins.clone()).await {
-                            //tracing::error!(error=?e, "reconcile_failed");
-                            // notif_state.notify_change(
-                            //     &notifier,
-                            //     "reconcile".to_string(),
-                            //     false,
-                            //     "Reconcile is working again",
-                            //     &format!("Profile reconcile failed: {}", e),
-                            // ).await;
-                        } else {
-                            // notif_state.notify_change(
-                            //     &notifier,
-                            //     "reconcile".to_string(),
-                            //     true,
-                            //     "Reconcile is working again",
-                            //     "unused",
-                            // ).await;
+                        if let Err(e) = update_progress_cid(&pool, &notifier, &mut notif_state, active_pins.clone()).await {
+                            tracing::error!(error=?e, "progress update error");
                         }
                    } => {}
                 }
@@ -350,7 +349,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                     _ = async {
                         if let Err(e) = ipfs.gc().await {
                             tracing::error!(error=?e, "gc_failed");
-                            notif_state.notify_change(
+                            notif_state.lock().await.notify_change(
                                 &notifier,
                                 "ipfs_gc".to_string(),
                                 false,
@@ -358,7 +357,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                                 &format!("IPFS GC failed: {}", e),
                             ).await;
                         } else {
-                            notif_state.notify_change(
+                            notif_state.lock().await.notify_change(
                                 &notifier,
                                 "ipfs_gc".to_string(),
                                 true,
@@ -403,8 +402,8 @@ pub async fn update_profile_cid(
 pub async fn reconcile_once(
     cfg: &Settings,
     pool: &Arc<CidPool>,
-    notifier: &MultiNotifier,
-    notif_state: &mut NotifState,
+    notifier: &Arc<MultiNotifier>,
+    notif_state: &Arc<Mutex<NotifState>>,
     active_pins: Arc<Mutex<HashMap<String, ProgressReceiver>>>,
 ) -> Result<()> {
     let ipfs = Ipfs::new(cfg.ipfs.api_url.clone());
@@ -432,7 +431,24 @@ pub async fn reconcile_once(
     for cid in desired.iter() {
         let cid = cid.clone();
         let ipfs = ipfs.clone();
-        spawn_pin_task(ipfs, cid.clone(), &active_pins).await;
+        if spawn_pin_task(ipfs, cid.clone(), &active_pins).await {
+            let notifier = notifier.clone();
+            let cid = cid.clone();
+            let notif_state_t = notif_state.clone();
+            tokio::spawn(async move {
+                notif_state_t
+                    .lock()
+                    .await
+                    .notify_change(
+                        &notifier,
+                        format!("Pinning task {}", cid),
+                        true,
+                        &format!("Task {} started", cid),
+                        &format!("unused"),
+                    )
+                    .await;
+            });
+        }
     }
 
     let to_unpin = pool.sync_pins(desired)?;
@@ -450,7 +466,7 @@ pub async fn reconcile_once(
                     Err(e) => {
                         let pin_set = ipfs.pin_ls_all().await?;
                         if pin_set.contains(&cid) {
-                            return Err(e);
+                            tracing::error!("");
                         }
                     }
                 };
@@ -468,13 +484,17 @@ pub async fn reconcile_once(
             }
 
             if let Err(e) = res {
-                tracing::error!(?e, cid, "unpin_failed");
+                tracing::error!(?e, cid, "Unpin failed");
             }
         });
     }
 
-    let pin_state_errors: Result<Vec<PinState>> =
-        async { ipfs.pin_verify().await.context("pin_verify") }.await;
+    let pin_state_errors: Result<Vec<PinState>> = async {
+        ipfs.pin_verify()
+            .await
+            .context("pin list verification error")
+    }
+    .await;
 
     match pin_state_errors {
         Ok(list) => {
@@ -493,10 +513,14 @@ pub async fn reconcile_once(
 
                 if p.err.is_some() {
                     notif_state
+                        .lock()
+                        .await
                         .notify_change(&notifier, cidm, false, &okm, &errm)
                         .await;
                 } else {
                     notif_state
+                        .lock()
+                        .await
                         .notify_change(&notifier, cidm, true, &okm, &errm)
                         .await;
                 };
@@ -529,11 +553,15 @@ pub async fn reconcile_once(
             tracing::warn!("Disk {} available space: {}%", i, available);
 
             notif_state
+                .lock()
+                .await
                 .notify_change(&notifier, diskm, false, &okm, &errm)
                 .await;
         } else {
             tracing::info!("Disk {} available space: {}%", i, available);
             notif_state
+                .lock()
+                .await
                 .notify_change(&notifier, diskm, true, &okm, &errm)
                 .await;
         };
@@ -547,13 +575,13 @@ async fn spawn_pin_task(
     ipfs: Ipfs,
     cid: String,
     active_pins: &Arc<Mutex<HashMap<String, ProgressReceiver>>>,
-) {
+) -> bool {
     let mut active = active_pins.lock().await;
 
     // If already running, don’t start again
     if active.contains_key(&cid) {
         tracing::debug!("Pin task already running for CID {}", cid);
-        return;
+        return false;
     }
 
     let (tx, rx) = mpsc::channel();
@@ -569,12 +597,14 @@ async fn spawn_pin_task(
             let _res = ipfs.pin_add_with_progress(&cid, tx).await;
         }
     });
+
+    return true;
 }
 
 pub async fn update_progress_cid(
     pool: &Arc<CidPool>,
-    _notifier: &MultiNotifier,
-    _notif_state: &mut NotifState,
+    notifier: &Arc<MultiNotifier>,
+    notif_state: &Arc<Mutex<NotifState>>,
     active_pins: Arc<Mutex<HashMap<String, ProgressReceiver>>>,
 ) -> Result<()> {
     let mut active = active_pins.lock().await;
@@ -582,6 +612,7 @@ pub async fn update_progress_cid(
     let mut errored = Vec::new();
 
     tracing::info!("{} Active pins", active.len());
+    let mut updates = HashMap::new();
 
     for (cid, rx) in active.iter_mut() {
         let mut latest: Option<PinProgress> = None;
@@ -592,23 +623,63 @@ pub async fn update_progress_cid(
 
         if let Some(p) = latest {
             match p {
-                PinProgress::Percent(v) => {
+                PinProgress::Blocks(v) => {
                     tracing::info!("CID {} progress: {} blocks", &cid[0..16], v);
                 }
                 PinProgress::Done => {
                     tracing::info!("CID {} pin complete", &cid[0..16]);
                     finished.push(cid.clone());
                 }
-                PinProgress::Error(e) => {
+                PinProgress::Error(ref e) => {
                     tracing::error!("CID {} pin error: {}", &cid[0..16], e);
                     let _ = pool.record_failure(Some(&cid), "pin", &format!("{:?}", e));
                     errored.push(cid.clone());
+                    let notifier = notifier.clone(); // clone if Arc
+                    let cid = cid.clone();
+                    let error = e.clone();
+                    let notif_state_t = notif_state.clone();
+                    tokio::spawn(async move {
+                        notif_state_t
+                            .lock()
+                            .await
+                            .notify_change(
+                                &notifier,
+                                format!("Pinning task {}", cid),
+                                false,
+                                &format!("Task {} started", cid),
+                                &format!("Task {} failed with error: {}", cid, error),
+                            )
+                            .await;
+                    });
                 }
-                PinProgress::Raw(line) => {
-                    tracing::debug!("CID {} raw: {}", &cid[0..16], line);
+                PinProgress::Raw(ref line) => {
+                    tracing::debug!("CID {} raw: {}", &cid[0..16], &line);
                 }
             }
+            updates.insert(cid.to_owned(), p);
         }
+    }
+
+    let stall = pool.update_progress(&updates)?;
+
+    for (cid, _task) in active.iter_mut() {
+        let notifier = notifier.clone(); // clone if Arc
+        let cid = cid.clone();
+        let stalled = !stall.contains(&cid);
+        let notif_state_t = notif_state.clone();
+        tokio::spawn(async move {
+            notif_state_t
+                .lock()
+                .await
+                .notify_change(
+                    &notifier,
+                    format!("Stalled progress {}", cid),
+                    stalled,
+                    &format!("Task {} progressed", cid),
+                    &format!("Task {} stalling", cid),
+                )
+                .await;
+        });
     }
 
     for cid in errored {

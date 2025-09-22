@@ -6,13 +6,16 @@ use bincode::{
 use parity_db::{Db, Options};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
 
+use crate::service::PinProgress;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PinRecord {
+    pub last_progress: u64,
     pub last_progress_at: u64,
     pub total_blocks: u64,
     pub sync_complete: bool,
@@ -56,7 +59,7 @@ impl CidPool {
         match Db::open(&opts) {
             Ok(db) => Ok(Self { db }),
             Err(e) => {
-                eprintln!("Failed to open DB at {:?}: {}. Recreating...", db_path, e);
+                tracing::warn!("Failed to open DB at {:?}: {}. Recreating...", db_path, e);
 
                 if db_path.exists() {
                     fs::remove_dir_all(&db_path)?;
@@ -156,6 +159,7 @@ impl CidPool {
 
         for cid in to_add {
             let rec = PinRecord {
+                last_progress: 0 as u64,
                 last_progress_at: chrono::Utc::now().timestamp() as u64,
                 total_blocks: 0,
                 sync_complete: false,
@@ -189,6 +193,7 @@ impl CidPool {
         // Add only the missing ones
         for cid in cids.difference(&existing) {
             let rec = PinRecord {
+                last_progress: 0,
                 last_progress_at: chrono::Utc::now().timestamp() as u64,
                 total_blocks: 0,
                 sync_complete: false,
@@ -202,9 +207,9 @@ impl CidPool {
     pub fn show_state(&self) -> anyhow::Result<()> {
         // current profile, if you have that stored separately
         if let Some(prof) = self.get_profile()? {
-            println!("current_profile: {:?}", prof);
+            tracing::info!("current_profile: {:?}", prof);
         } else {
-            println!("current_profile: None");
+            tracing::info!("current_profile: None");
         }
 
         // iterate through all pinned CIDs
@@ -212,10 +217,96 @@ impl CidPool {
         while let Some((key, val)) = iter.next()? {
             let cid = String::from_utf8(key.to_vec())?;
             let (rec, _): (PinRecord, usize) = decode_from_slice(&val, config::standard())?;
-            println!(
-                "pinned: {} total blocks: {} progress at: {} complete: {}",
-                cid, rec.total_blocks, rec.last_progress_at, rec.sync_complete
+            tracing::info!(
+                "pinned: {} total blocks: {} last progress: {} at: {} complete: {}",
+                cid,
+                rec.total_blocks,
+                rec.last_progress,
+                rec.last_progress_at,
+                rec.sync_complete
             );
+        }
+
+        Ok(())
+    }
+
+    pub fn update_progress(
+        &self,
+        updates: &HashMap<String, PinProgress>,
+    ) -> Result<HashSet<String>> {
+        let mut ops = Vec::new();
+        let mut stale = HashSet::new();
+        let now = chrono::Utc::now().timestamp() as u64;
+
+        for (cid, progress) in updates {
+            let key = cid.as_bytes();
+
+            let existing = if let Some(val) = self.db.get(0, key)? {
+                let (rec, _): (PinRecord, usize) = decode_from_slice(&val, config::standard())?;
+                Some(rec)
+            } else {
+                None
+            };
+
+            let mut rec = existing.unwrap_or(PinRecord {
+                last_progress: 0,
+                last_progress_at: 0,
+                total_blocks: 0,
+                sync_complete: false,
+            });
+
+            match progress {
+                PinProgress::Blocks(v) => {
+                    if *v > rec.last_progress {
+                        rec.last_progress = *v;
+                        rec.last_progress_at = now;
+                    }
+                }
+                PinProgress::Done => {
+                    rec.sync_complete = true;
+                    rec.last_progress_at = now;
+                }
+                PinProgress::Error(e) => {
+                    tracing::error!("Error progress passed into update_progress: {}", e);
+                }
+                PinProgress::Raw(_) => {
+                    // Skip raw lines
+                }
+            }
+
+            if !rec.sync_complete && rec.last_progress_at > 0 {
+                if now.saturating_sub(rec.last_progress_at) > 180 {
+                    stale.insert(cid.clone());
+                }
+            }
+
+            let value = encode_to_vec(&rec, config::standard())?;
+            ops.push((0, key, Some(value)));
+        }
+
+        if !ops.is_empty() {
+            self.db.commit(ops)?;
+        }
+
+        Ok(stale)
+    }
+
+    pub fn touch_all_progress(&self) -> anyhow::Result<()> {
+        let mut iter = self.db.iter(0)?; // column 0 = pins
+        let now = chrono::Utc::now().timestamp() as u64;
+
+        let mut batch = Vec::new();
+
+        while let Some((key, val)) = iter.next()? {
+            let (mut rec, _): (PinRecord, usize) = decode_from_slice(&val, config::standard())?;
+            rec.last_progress_at = now;
+
+            let new_val = encode_to_vec(&rec, config::standard())?;
+            batch.push((0, key, Some(new_val)));
+        }
+
+        if !batch.is_empty() {
+            self.db.commit(batch)?;
         }
 
         Ok(())

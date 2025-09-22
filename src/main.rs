@@ -52,7 +52,7 @@ async fn main() -> Result<()> {
 
     let pool_location = match cfg.db.path {
         ref path => path,
-        _ => "./pool.db",
+        _ => "./miner_db_pool",
     };
 
     let pool = Arc::new(CidPool::init(&pool_location)?);
@@ -64,7 +64,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Run => service::run(cfg, pool, notifier).await?,
         Commands::Reconcile => {
-            let mut notif_state = NotifState::default();
+            let mut notif_state = Arc::new(Mutex::new(NotifState::default()));
             let active_pins: Arc<Mutex<HashMap<String, ProgressReceiver>>> =
                 Arc::new(Mutex::new(HashMap::new()));
             service::reconcile_once(&cfg, &pool, &notifier, &mut notif_state, active_pins).await?

@@ -71,7 +71,7 @@ impl Client {
                         // IPFS progress lines are JSON like {"Pins":["cid"]} or {"Progress": 1234}
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&s) {
                             if let Some(progress) = json.get("Progress").and_then(|v| v.as_u64()) {
-                                let _ = tx.send(PinProgress::Percent(progress))?;
+                                let _ = tx.send(PinProgress::Blocks(progress))?;
                             } else if let Some(pins) = json.get("Pins").and_then(|v| v.as_array()) {
                                 if !pins.is_empty() {
                                     let _ = tx.send(PinProgress::Done)?;
