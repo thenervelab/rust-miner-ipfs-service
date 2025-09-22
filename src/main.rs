@@ -10,11 +10,14 @@ mod substrate;
 
 use crate::{
     db::CidPool,
-    service::{NotifState, ProgressReceiver},
+    service::{NotifState, PinSet, ProgressReceiver},
 };
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use tokio::sync::Mutex;
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -50,10 +53,7 @@ async fn main() -> Result<()> {
     let cfg = settings::load(cli.config.as_deref()).await?;
     tracing::info!(?cfg, "effective_config");
 
-    let pool_location = match cfg.db.path {
-        ref path => path,
-        _ => "./miner_db_pool",
-    };
+    let pool_location = cfg.db.path.clone();
 
     let pool = Arc::new(CidPool::init(&pool_location)?);
 
@@ -67,7 +67,20 @@ async fn main() -> Result<()> {
             let mut notif_state = Arc::new(Mutex::new(NotifState::default()));
             let active_pins: Arc<Mutex<HashMap<String, ProgressReceiver>>> =
                 Arc::new(Mutex::new(HashMap::new()));
-            service::reconcile_once(&cfg, &pool, &notifier, &mut notif_state, active_pins).await?
+            let pending_pins: PinSet = Arc::new(Mutex::new(HashSet::new()));
+            let _stalled_pins: PinSet = Arc::new(Mutex::new(HashSet::new()));
+            let concurrency = Arc::new(tokio::sync::Semaphore::new(8)); // start with 8
+
+            service::reconcile_once(
+                &cfg,
+                &pool,
+                &notifier,
+                &mut notif_state,
+                active_pins.clone(),
+                pending_pins.clone(),
+                concurrency.clone(),
+            )
+            .await?
 
             // do poll progress until its done
         }

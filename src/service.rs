@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, mpsc},
     time::Duration,
 };
@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Context, Result};
 
 use tokio::{
-    sync::{Mutex, Notify},
+    sync::{Mutex, Notify, Semaphore},
     time,
     time::sleep,
 };
@@ -29,6 +29,7 @@ pub struct NotifState {
 
 pub enum PinProgress {
     /// Raw line from IPFS (fallback)
+    #[allow(dead_code)]
     Raw(String),
     /// Parsed blocks retrieved
     Blocks(u64),
@@ -37,6 +38,7 @@ pub enum PinProgress {
     Error(String),
 }
 
+pub type PinSet = Arc<Mutex<HashSet<String>>>;
 pub type ProgressSender = mpsc::Sender<PinProgress>;
 pub type ProgressReceiver = mpsc::Receiver<PinProgress>;
 
@@ -52,12 +54,16 @@ impl NotifState {
         let ok_msg = ok_msg.to_owned();
         let err_msg = err_msg.to_owned();
         let notifier = notifier.clone();
-        let last_status = self.last_status.clone();
 
         let last;
+        // atomically read and update last status
         {
-            last = last_status.lock().await.get(&key).copied();
+            let mut last_status_map = self.last_status.lock().await;
+            last = last_status_map.get(&key).copied();
+            last_status_map.insert(key.clone(), is_ok);
         }
+
+        // decide whether to notify in a thread
         tokio::spawn(async move {
             match (last, is_ok) {
                 (Some(true), false) => {
@@ -79,8 +85,6 @@ impl NotifState {
                     // Still OK or still failing → no spam
                 }
             }
-
-            last_status.lock().await.insert(key, is_ok);
         });
     }
 }
@@ -107,6 +111,11 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
 
     let active_pins: Arc<Mutex<HashMap<String, ProgressReceiver>>> =
         Arc::new(Mutex::new(HashMap::new()));
+
+    let pending_pins: PinSet = Arc::new(Mutex::new(HashSet::new()));
+    let stalled_pins: PinSet = Arc::new(Mutex::new(HashSet::new()));
+
+    let concurrency = Arc::new(Semaphore::new(8)); // start with 8
 
     tokio::select! {
         _ = shutdown.notified() => {
@@ -197,7 +206,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
     health_check.tick().await;
 
     // reset last_progress_at values to current time so that node downtime does not trigger stalled progress detection
-    let reset_progress_at = pool.touch_all_progress();
+    let _ = pool.touch_all_progress();
 
     tokio::select! {
         _ = shutdown.notified() => {
@@ -315,7 +324,11 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                         break;
                     }
                     _ = async {
-                        if let Err(e) = reconcile_once(&cfg, &pool, &notifier, &mut notif_state, active_pins.clone()).await {
+                        if let Err(e) = reconcile_once(&cfg, &pool, &notifier, &mut notif_state,
+                                active_pins.clone(),
+                                pending_pins.clone(),
+                                concurrency.clone(),
+                            ).await {
                             tracing::error!(error=?e, "reconcile_failed");
                              notif_state.lock().await.notify_change(
                                 &notifier,
@@ -334,7 +347,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                             ).await;
                         }
 
-                        if let Err(e) = update_progress_cid(&pool, &notifier, &mut notif_state, active_pins.clone()).await {
+                        if let Err(e) = update_progress_cid(&pool, &notifier, &mut notif_state, active_pins.clone(),  stalled_pins.clone(), concurrency.clone()).await {
                             tracing::error!(error=?e, "progress update error");
                         }
                    } => {}
@@ -405,6 +418,8 @@ pub async fn reconcile_once(
     notifier: &Arc<MultiNotifier>,
     notif_state: &Arc<Mutex<NotifState>>,
     active_pins: Arc<Mutex<HashMap<String, ProgressReceiver>>>,
+    pending_pins: PinSet,
+    concurrency: Arc<Semaphore>,
 ) -> Result<()> {
     let ipfs = Ipfs::new(cfg.ipfs.api_url.clone());
 
@@ -431,7 +446,18 @@ pub async fn reconcile_once(
     for cid in desired.iter() {
         let cid = cid.clone();
         let ipfs = ipfs.clone();
-        if spawn_pin_task(ipfs, cid.clone(), &active_pins).await {
+        if spawn_pin_task(
+            ipfs,
+            cid.clone(),
+            &active_pins.clone(),
+            &pending_pins.clone(),
+            concurrency.clone(),
+        )
+        .await
+        {
+            // triggers when new pin task background thread is started (spawn_pin_task returns true)
+
+            let _ = pool.touch_progress(&cid);
             let notifier = notifier.clone();
             let cid = cid.clone();
             let notif_state_t = notif_state.clone();
@@ -463,7 +489,7 @@ pub async fn reconcile_once(
             let res: Result<()> = async {
                 let _pin_attempt = match ipfs.pin_rm(&cid).await.context("pin_rm") {
                     Ok(()) => {}
-                    Err(e) => {
+                    Err(_e) => {
                         let pin_set = ipfs.pin_ls_all().await?;
                         if pin_set.contains(&cid) {
                             tracing::error!("");
@@ -575,30 +601,39 @@ async fn spawn_pin_task(
     ipfs: Ipfs,
     cid: String,
     active_pins: &Arc<Mutex<HashMap<String, ProgressReceiver>>>,
+    pending_pins: &PinSet,
+    concurrency: Arc<Semaphore>,
 ) -> bool {
     let mut active = active_pins.lock().await;
 
-    // If already running, don’t start again
     if active.contains_key(&cid) {
-        tracing::debug!("Pin task already running for CID {}", cid);
         return false;
     }
 
-    let (tx, rx) = mpsc::channel();
+    // Try get a permit without waiting
+    if let Ok(permit) = concurrency.clone().try_acquire_owned() {
+        let (tx, rx) = mpsc::channel();
+        active.insert(cid.clone(), rx);
 
-    // Store the receiver in the map
-    active.insert(cid.clone(), rx);
+        tokio::spawn({
+            tracing::info!("Starting new pin task for CID: {}", cid);
+            let ipfs = ipfs.clone();
+            async move {
+                let _res = ipfs.pin_add_with_progress(&cid, tx).await;
+                drop(permit);
+            }
+        });
 
-    // Spawn the actual pinning worker
-    tokio::spawn({
-        tracing::info!("Starting new pin task for CID: {}", cid);
-        let ipfs = ipfs.clone();
-        async move {
-            let _res = ipfs.pin_add_with_progress(&cid, tx).await;
+        return true;
+    } else {
+        // No slot available → mark as pending
+        if !pending_pins.lock().await.contains(&cid) {
+            tracing::info!("CID {} added to pending queue", cid);
+            pending_pins.lock().await.insert(cid);
         }
-    });
+    }
 
-    return true;
+    return false;
 }
 
 pub async fn update_progress_cid(
@@ -606,6 +641,8 @@ pub async fn update_progress_cid(
     notifier: &Arc<MultiNotifier>,
     notif_state: &Arc<Mutex<NotifState>>,
     active_pins: Arc<Mutex<HashMap<String, ProgressReceiver>>>,
+    stalled_pins: PinSet,
+    concurrency: Arc<Semaphore>,
 ) -> Result<()> {
     let mut active = active_pins.lock().await;
     let mut finished = Vec::new();
@@ -625,6 +662,26 @@ pub async fn update_progress_cid(
             match p {
                 PinProgress::Blocks(v) => {
                     tracing::info!("CID {} progress: {} blocks", &cid[0..16], v);
+                    if !stalled_pins.lock().await.contains(cid) {
+                        stalled_pins.lock().await.remove(cid);
+                        let notifier = notifier.clone();
+                        let cid = cid.clone();
+                        let notif_state_t = notif_state.clone();
+
+                        tokio::spawn(async move {
+                            notif_state_t
+                                .lock()
+                                .await
+                                .notify_change(
+                                    &notifier,
+                                    format!("Stalled progress {}", cid),
+                                    true,
+                                    &format!("Task {} progressing", cid),
+                                    "unused",
+                                )
+                                .await;
+                        });
+                    }
                 }
                 PinProgress::Done => {
                     tracing::info!("CID {} pin complete", &cid[0..16]);
@@ -634,7 +691,7 @@ pub async fn update_progress_cid(
                     tracing::error!("CID {} pin error: {}", &cid[0..16], e);
                     let _ = pool.record_failure(Some(&cid), "pin", &format!("{:?}", e));
                     errored.push(cid.clone());
-                    let notifier = notifier.clone(); // clone if Arc
+                    let notifier = notifier.clone();
                     let cid = cid.clone();
                     let error = e.clone();
                     let notif_state_t = notif_state.clone();
@@ -663,27 +720,34 @@ pub async fn update_progress_cid(
     let stall = pool.update_progress(&updates)?;
 
     for (cid, _task) in active.iter_mut() {
-        let notifier = notifier.clone(); // clone if Arc
+        let notifier = notifier.clone();
         let cid = cid.clone();
-        let stalled = !stall.contains(&cid);
         let notif_state_t = notif_state.clone();
-        tokio::spawn(async move {
-            notif_state_t
-                .lock()
-                .await
-                .notify_change(
-                    &notifier,
-                    format!("Stalled progress {}", cid),
-                    stalled,
-                    &format!("Task {} progressed", cid),
-                    &format!("Task {} stalling", cid),
-                )
-                .await;
-        });
+
+        if !stalled_pins.lock().await.contains(&cid) && stall.contains(&cid) {
+            stalled_pins.lock().await.insert(cid.clone());
+            concurrency.add_permits(1);
+            tracing::debug!("Stalled progress {}", cid);
+
+            tokio::spawn(async move {
+                notif_state_t
+                    .lock()
+                    .await
+                    .notify_change(
+                        &notifier,
+                        format!("Stalled progress {}", cid),
+                        true,
+                        "unused",
+                        &format!("Task {} stalling", cid),
+                    )
+                    .await;
+            });
+        }
     }
 
     for cid in errored {
         active.remove(&cid);
+        concurrency.add_permits(1);
     }
 
     Ok(())

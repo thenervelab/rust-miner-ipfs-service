@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
 use crate::service::PinProgress;
@@ -85,6 +85,7 @@ impl CidPool {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn get_pin(&self, cid: &str) -> Result<Option<PinRecord>> {
         if let Some(val) = self.db.get(0, cid.as_bytes())? {
             let (rec, _len): (PinRecord, usize) = decode_from_slice(&val, config::standard())?;
@@ -275,7 +276,7 @@ impl CidPool {
             }
 
             if !rec.sync_complete && rec.last_progress_at > 0 {
-                if now.saturating_sub(rec.last_progress_at) > 180 {
+                if now.saturating_sub(rec.last_progress_at) > 90 {
                     stale.insert(cid.clone());
                 }
             }
@@ -306,6 +307,23 @@ impl CidPool {
         }
 
         if !batch.is_empty() {
+            self.db.commit(batch)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn touch_progress(&self, cid: &str) -> anyhow::Result<()> {
+        let key = cid.as_bytes();
+        let now = chrono::Utc::now().timestamp() as u64;
+
+        if let Some(val) = self.db.get(0, key)? {
+            let (mut rec, _): (PinRecord, usize) = decode_from_slice(&val, config::standard())?;
+            rec.last_progress_at = now;
+
+            let new_val = encode_to_vec(&rec, config::standard())?;
+            let batch = vec![(0, key.to_vec(), Some(new_val))];
+
             self.db.commit(batch)?;
         }
 

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use reqwest::Url;
 use serde_json::Deserializer;
@@ -77,10 +77,10 @@ impl Client {
                                     let _ = tx.send(PinProgress::Done)?;
                                 }
                             } else {
-                                let _ = tx.send(PinProgress::Raw(s))?;
+                                // let _ = tx.send(PinProgress::Raw(s))?; // {}
                             }
                         } else {
-                            let _ = tx.send(PinProgress::Raw(s))?;
+                            // let _ = tx.send(PinProgress::Raw(s))?; // {}
                         }
                     }
                 }
