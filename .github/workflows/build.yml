@@ -82,7 +82,7 @@ jobs:
       - name: Upload coverage report to Pages
         uses: actions/upload-pages-artifact@v3
         with:
-          path: coverage-html/
+          path: coverage-html/html
 
   deploy-coverage:
     environment:
