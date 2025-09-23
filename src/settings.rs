@@ -6,7 +6,7 @@ use figment::{
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ServiceCfg {
     pub poll_interval_secs: u64,
     pub reconcile_interval_secs: u64,
@@ -15,18 +15,18 @@ pub struct ServiceCfg {
     pub max_concurrent_ipfs_ops: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DbCfg {
     pub path: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct IpfsCfg {
     pub api_url: String,
     pub gateway_url: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SubstrateCfg {
     pub ws_url: String,
     pub raw_storage_key_hex: Option<String>,
@@ -35,13 +35,13 @@ pub struct SubstrateCfg {
     pub miner_profile_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TelegramCfg {
     pub bot_token: Option<String>,
     pub chat_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GmailCfg {
     pub username: Option<String>,
     pub app_password: Option<String>,
@@ -49,12 +49,12 @@ pub struct GmailCfg {
     pub to: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MonitoringConfig {
     pub port: Option<u16>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
     pub service: ServiceCfg,
     pub db: DbCfg,

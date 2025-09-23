@@ -848,8 +848,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_update_progress_cid_handles_done() {
-        // Create a temporary DB directory and init the real CidPool
+    async fn test_update_progress_cid_blocks_and_done() {
         let tmp = TempDir::new().unwrap();
         let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap()).unwrap());
 
@@ -859,8 +858,9 @@ mod tests {
         let stalled_pins = Arc::new(Mutex::new(HashSet::new()));
         let concurrency = Arc::new(Semaphore::new(2));
 
-        // create a channel and push a Done progress so update_progress_cid sees it
+        // create a channel and push a Block and Done progress so update_progress_cid sees it
         let (tx, rx) = mpsc::channel::<PinProgress>();
+        tx.send(PinProgress::Blocks(42)).unwrap();
         tx.send(PinProgress::Done).unwrap();
         active_pins.lock().await.insert("cidX".to_string(), rx);
 
@@ -886,6 +886,33 @@ mod tests {
             rec.sync_complete,
             "record must be marked sync_complete after Done"
         );
+    }
+
+    #[tokio::test]
+    async fn test_update_progress_cid_error_path() {
+        let tmp = TempDir::new().unwrap();
+        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap()).unwrap());
+        let notifier = Arc::new(MultiNotifier::new());
+        let notif_state = Arc::new(Mutex::new(NotifState::default()));
+        let active = Arc::new(Mutex::new(HashMap::new()));
+        let stalled = Arc::new(Mutex::new(HashSet::new()));
+        let concurrency = Arc::new(Semaphore::new(1));
+
+        let (tx, rx) = mpsc::channel::<PinProgress>();
+        tx.send(PinProgress::Error("boom".into())).unwrap();
+        active.lock().await.insert("cidErr".to_string(), rx);
+
+        let res = update_progress_cid(
+            &pool,
+            &notifier,
+            &notif_state,
+            active.clone(),
+            stalled.clone(),
+            concurrency.clone(),
+        )
+        .await;
+        assert!(res.is_ok());
+        assert!(!active.lock().await.contains_key("cidErr"));
     }
 
     #[tokio::test]
@@ -960,34 +987,5 @@ mod tests {
         assert!(!result);
         assert!(pending.lock().await.contains(&cid));
         assert!(active.lock().await.len() == 0);
-    }
-
-    #[tokio::test]
-    async fn test_update_progress_cid_handles_error() {
-        let tmp = TempDir::new().unwrap();
-        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap()).unwrap());
-        let notifier = Arc::new(MultiNotifier::new());
-        let notif_state = Arc::new(Mutex::new(NotifState::default()));
-        let active = Arc::new(Mutex::new(HashMap::new()));
-        let stalled = Arc::new(Mutex::new(HashSet::new()));
-        let concurrency = Arc::new(Semaphore::new(1));
-
-        let (tx, rx) = mpsc::channel::<PinProgress>();
-        tx.send(PinProgress::Error("boom".into())).unwrap();
-        active.lock().await.insert("cidErr".to_string(), rx);
-
-        let res = update_progress_cid(
-            &pool,
-            &notifier,
-            &notif_state,
-            active.clone(),
-            stalled.clone(),
-            concurrency.clone(),
-        )
-        .await;
-        assert!(res.is_ok());
-
-        // After error, active should be cleaned up
-        assert!(!active.lock().await.contains_key("cidErr"));
     }
 }

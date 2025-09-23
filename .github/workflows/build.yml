@@ -12,12 +12,10 @@ on:
 jobs:
 
   build:
-
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-
     steps:
 
       - uses: actions/checkout@v5
@@ -54,3 +52,48 @@ jobs:
         with:
           name: rust-miner-ipfs-service-windows
           path: target/release/miner-ipfs-service.exe
+  
+  coverage:
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    steps:
+
+      - uses: actions/checkout@v5
+
+      - name: Install llvm-tools
+        run: rustup component add llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov
+
+      - name: Run tests with coverage
+        run: cargo llvm-cov --workspace --all-features --html --output-dir coverage-html
+
+      - name: Upload coverage as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage-html/
+
+      - name: Upload coverage report to Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: coverage-html/
+
+  deploy-coverage:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: coverage
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
