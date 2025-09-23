@@ -59,3 +59,6 @@ bs58 = "0.4"
 [dev-dependencies]
 assert_cmd = "2"
 serial_test = "3"
+tempfile = "3"
+httpmock = "0.7"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

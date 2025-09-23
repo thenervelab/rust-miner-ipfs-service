@@ -63,29 +63,51 @@ impl Client {
             .error_for_status()?;
 
         let mut stream = resp.bytes_stream();
+        let mut buffer = Vec::new();
 
         while let Some(chunk) = stream.next().await {
             match chunk {
                 Ok(bytes) => {
-                    if let Ok(s) = String::from_utf8(bytes.to_vec()) {
-                        // IPFS progress lines are JSON like {"Pins":["cid"]} or {"Progress": 1234}
-                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&s) {
-                            if let Some(progress) = json.get("Progress").and_then(|v| v.as_u64()) {
-                                let _ = tx.send(PinProgress::Blocks(progress))?;
-                            } else if let Some(pins) = json.get("Pins").and_then(|v| v.as_array()) {
-                                if !pins.is_empty() {
-                                    let _ = tx.send(PinProgress::Done)?;
+                    buffer.extend_from_slice(&bytes);
+
+                    let slice: &[u8] = &buffer;
+                    let mut de = serde_json::Deserializer::from_slice(slice)
+                        .into_iter::<serde_json::Value>();
+
+                    let mut consumed = 0;
+                    while let Some(item) = de.next() {
+                        match item {
+                            Ok(json) => {
+                                consumed = de.byte_offset();
+
+                                if let Some(progress) =
+                                    json.get("Progress").and_then(|v| v.as_u64())
+                                {
+                                    let _ = tx.send(PinProgress::Blocks(progress));
+                                } else if let Some(pins) =
+                                    json.get("Pins").and_then(|v| v.as_array())
+                                {
+                                    if !pins.is_empty() {
+                                        let _ = tx.send(PinProgress::Done);
+                                    }
                                 }
-                            } else {
-                                // let _ = tx.send(PinProgress::Raw(s))?; // {}
                             }
-                        } else {
-                            // let _ = tx.send(PinProgress::Raw(s))?; // {}
+                            Err(e) if e.is_eof() => {
+                                // not enough data yet → wait for next chunk
+                                break;
+                            }
+                            Err(e) => {
+                                let _ = tx.send(PinProgress::Error(e.to_string()));
+                                return Err(e.into());
+                            }
                         }
                     }
+
+                    // Drop only parsed portion, keep remainder in buffer
+                    buffer.drain(0..consumed);
                 }
                 Err(e) => {
-                    let _ = tx.send(PinProgress::Error(e.to_string()))?;
+                    let _ = tx.send(PinProgress::Error(e.to_string()));
                     return Err(e.into());
                 }
             }
@@ -187,5 +209,89 @@ impl Client {
         let url = self.base.join("/api/v0/repo/gc")?;
         self.http.post(url).send().await?.error_for_status()?;
         Ok(())
+    }
+}
+
+//          //          //          //          //          //          //          //          //          //          //          //
+
+//                      //                      //                      //                                  //                      //
+
+//                      //                      //          //          //          //                      //                      //
+
+//                      //                      //                                  //                      //                      //
+
+//                      //                      //          //          //          //                      //                      //
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use httpmock::prelude::*;
+    use std::sync::mpsc;
+
+    #[tokio::test]
+    async fn check_health_ok() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.path("/api/v0/id");
+            then.status(200).body("{}");
+        });
+
+        let client = Client::new(server.base_url());
+        assert!(client.check_health().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn pin_add_with_progress_blocks_and_done() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.path("/api/v0/pin/add");
+            then.status(200).body(r#"{"Progress":10}{"Pins":["abc"]}"#);
+        });
+
+        let client = Client::new(server.base_url());
+        let (tx, rx) = mpsc::channel();
+        client.pin_add_with_progress("abc", tx).await.unwrap();
+
+        let first = rx.recv().unwrap();
+        assert!(matches!(first, PinProgress::Blocks(10)));
+
+        let second = rx.recv().unwrap();
+        assert!(matches!(second, PinProgress::Done));
+    }
+
+    #[tokio::test]
+    async fn pin_add_with_progress_newline_delimited() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.path("/api/v0/pin/add");
+            then.status(200).body(
+                r#"{"Progress":10}
+                   {"Progress":20}
+                   {"Pins":["abc"]}"#,
+            );
+        });
+
+        let client = Client::new(server.base_url());
+        let (tx, rx) = mpsc::channel();
+        client.pin_add_with_progress("abc", tx).await.unwrap();
+
+        let updates: Vec<_> = rx.try_iter().collect();
+
+        assert!(matches!(updates[0], PinProgress::Blocks(10)));
+        assert!(matches!(updates[1], PinProgress::Blocks(20)));
+        assert!(matches!(updates[2], PinProgress::Done));
+    }
+
+    #[tokio::test]
+    async fn pin_rm_fails_on_non_200() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.path("/api/v0/pin/rm");
+            then.status(500).body("error");
+        });
+
+        let client = Client::new(server.base_url());
+        let res = client.pin_rm("badcid").await;
+        assert!(res.is_err());
     }
 }

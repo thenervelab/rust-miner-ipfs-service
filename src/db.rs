@@ -95,20 +95,17 @@ impl CidPool {
         }
     }
 
-    /// Delete a pin record
     pub fn del_pin(&self, cid: &str) -> Result<()> {
         self.db.commit([(0, cid.as_bytes(), None)])?;
         Ok(())
     }
 
-    /// Save current profile
     pub fn set_profile(&self, cid: Option<&str>) -> Result<()> {
         let value = cid.map(|c| c.as_bytes().to_vec());
         self.db.commit([(1, b"profile", value)])?;
         Ok(())
     }
 
-    /// Get current profile
     pub fn get_profile(&self) -> Result<Option<String>> {
         if let Some(val) = self.db.get(1, b"profile")? {
             Ok(Some(String::from_utf8(val)?))
@@ -117,12 +114,7 @@ impl CidPool {
         }
     }
 
-    /// Record a failure
     pub fn record_failure(&self, cid: Option<&str>, action: &str, error: &str) -> Result<()> {
-        let ts = chrono::Utc::now().timestamp_millis().to_be_bytes();
-        let mut key = b"fail_".to_vec();
-        key.extend_from_slice(&ts);
-
         #[derive(Serialize, Deserialize)]
         struct Failure {
             cid: Option<String>,
@@ -140,7 +132,8 @@ impl CidPool {
 
         let value = encode_to_vec(&f, config::standard())?;
         let key = format!("failure-{}", f.cid.clone().unwrap_or_default());
-        self.db.commit([(1, key.as_bytes(), Some(value))])?;
+
+        self.db.commit([(2, key.as_bytes(), Some(value))])?;
         Ok(())
     }
 
@@ -277,7 +270,7 @@ impl CidPool {
 
             if !rec.sync_complete
                 && rec.last_progress_at > 0
-                && now.saturating_sub(rec.last_progress_at) > 120
+                && now.saturating_sub(rec.last_progress_at) > 60
             {
                 stale.insert(cid.clone());
             }
@@ -329,5 +322,113 @@ impl CidPool {
         }
 
         Ok(())
+    }
+}
+
+//          //          //          //          //          //          //          //          //          //          //          //
+
+//                      //                      //                      //                                  //                      //
+
+//                      //                      //          //          //          //                      //                      //
+
+//                      //                      //                                  //                      //                      //
+
+//                      //                      //          //          //          //                      //                      //
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use tempfile::TempDir;
+
+    fn new_pool() -> (CidPool, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let pool = CidPool::init(dir.path().to_str().unwrap()).unwrap();
+        (pool, dir)
+    }
+
+    #[test]
+    fn put_and_get_pin_roundtrip() {
+        let (pool, _tmpdir) = new_pool(); // keep _tmpdir alive for test lifetime
+
+        let rec = PinRecord {
+            last_progress: 5,
+            last_progress_at: 100,
+            total_blocks: 50,
+            sync_complete: false,
+        };
+        pool.put_pin("cid1", &rec).unwrap();
+
+        let fetched = pool.get_pin("cid1").unwrap().unwrap();
+        assert_eq!(fetched.last_progress, 5);
+    }
+
+    #[test]
+    fn delete_pin() {
+        let (pool, _tmpdir) = new_pool(); // keep _tmpdir alive for test lifetime
+
+        let rec = PinRecord {
+            last_progress: 1,
+            last_progress_at: 2,
+            total_blocks: 3,
+            sync_complete: false,
+        };
+        pool.put_pin("cidX", &rec).unwrap();
+        pool.del_pin("cidX").unwrap();
+        assert!(pool.get_pin("cidX").unwrap().is_none());
+    }
+
+    #[test]
+    fn merge_and_sync_pins() {
+        let (pool, _tmpdir) = new_pool(); // keep _tmpdir alive for test lifetime
+
+        let mut set = HashSet::new();
+        set.insert("cidA".to_string());
+        set.insert("cidB".to_string());
+        pool.merge_pins(&set).unwrap();
+        assert!(pool.get_pin("cidA").unwrap().is_some());
+        assert!(pool.get_pin("cidB").unwrap().is_some());
+
+        pool.sync_pins(vec!["cidC".to_string()]).unwrap();
+        assert!(pool.get_pin("cidC").unwrap().is_some());
+        assert!(!pool.get_pin("cidA").unwrap().is_some());
+        assert!(!pool.get_pin("cidB").unwrap().is_some());
+    }
+
+    #[test]
+    fn touch_progress_updates_timestamp() {
+        let (pool, _tmpdir) = new_pool(); // keep _tmpdir alive for test lifetime
+
+        let rec = PinRecord {
+            last_progress: 1,
+            last_progress_at: 0,
+            total_blocks: 10,
+            sync_complete: false,
+        };
+        pool.put_pin("cidP", &rec).unwrap();
+
+        pool.touch_progress("cidP").unwrap();
+
+        let first_rec = pool.get_pin("cidP").unwrap().unwrap();
+        assert!(first_rec.last_progress_at > rec.last_progress_at);
+
+        std::thread::sleep(std::time::Duration::from_secs(1));
+
+        pool.touch_progress("cidP").unwrap();
+
+        let new_rec = pool.get_pin("cidP").unwrap().unwrap();
+        assert!(new_rec.last_progress_at > first_rec.last_progress_at);
+    }
+
+    #[test]
+    fn record_failure_stores_entry() {
+        let (pool, _tmpdir) = new_pool(); // keep _tmpdir alive for test lifetime
+
+        pool.record_failure(Some("cidErr"), "pin", "failure to be persisted")
+            .unwrap();
+
+        let mut iter = pool.db.iter(2).unwrap(); // must use 1, not 2
+        let entry = iter.next().unwrap();
+        assert!(entry.is_some());
     }
 }

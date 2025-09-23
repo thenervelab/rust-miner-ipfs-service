@@ -115,7 +115,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
     let pending_pins: PinSet = Arc::new(Mutex::new(HashSet::new()));
     let stalled_pins: PinSet = Arc::new(Mutex::new(HashSet::new()));
 
-    let concurrency = Arc::new(Semaphore::new(32));
+    let concurrency = Arc::new(Semaphore::new(64));
 
     tokio::select! {
         _ = shutdown.notified() => {
@@ -751,4 +751,243 @@ pub async fn update_progress_cid(
     }
 
     Ok(())
+}
+
+//          //          //          //          //          //          //          //          //          //          //          //
+
+//                      //                      //                      //                                  //                      //
+
+//                      //                      //          //          //          //                      //                      //
+
+//                      //                      //                                  //                      //                      //
+
+//                      //                      //          //          //          //                      //                      //
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{HashMap, HashSet};
+    use std::sync::{Arc, mpsc};
+    use tempfile::TempDir;
+    use tokio::sync::{Mutex, Semaphore};
+
+    // NOTE: we reference MultiNotifier and CidPool through their crate paths
+    // to avoid any ambiguity inside this file's module tree.
+    use crate::db::CidPool;
+    use crate::notifier::MultiNotifier;
+
+    #[tokio::test]
+    async fn test_notify_change_adds_cid() {
+        let notifier = Arc::new(MultiNotifier::new());
+        let mut state = NotifState::default();
+
+        // notify_change signature expects ok_msg & err_msg as &str (not String)
+        state
+            .notify_change(&notifier, "cid1".to_string(), false, "start", "stop")
+            .await;
+
+        // Validate side-effect: last_status map should contain the entry
+        let map = state.last_status.lock().await;
+        assert_eq!(map.get("cid1"), Some(&false));
+    }
+
+    #[tokio::test]
+    async fn test_notify_change_idempotent() {
+        let notifier = Arc::new(MultiNotifier::new());
+        let mut state = NotifState::default();
+
+        state
+            .notify_change(&notifier, "cid1".to_string(), false, "start", "stop")
+            .await;
+
+        // second identical update should not create an extra entry
+        state
+            .notify_change(
+                &notifier,
+                "cid1".to_string(),
+                false,
+                "start-again",
+                "stop-again",
+            )
+            .await;
+
+        let map = state.last_status.lock().await;
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get("cid1"), Some(&false));
+    }
+
+    #[tokio::test]
+    async fn test_progress_receiver_flow() {
+        // Use std::sync::mpsc because your code's ProgressReceiver is that type.
+        let (tx, rx) = mpsc::channel::<PinProgress>();
+
+        // store a receiver in the HashMap just like your runtime does
+        let mut active_pins: HashMap<String, ProgressReceiver> = HashMap::new();
+        active_pins.insert("cidA".to_string(), rx);
+
+        // push updates into the sender (synchronous)
+        tx.send(PinProgress::Blocks(5)).unwrap();
+        tx.send(PinProgress::Done).unwrap();
+
+        // pull the receiver back out and drain it (non-blocking)
+        let rx = active_pins.remove("cidA").unwrap();
+
+        let mut latest: Option<PinProgress> = None;
+        loop {
+            match rx.try_recv() {
+                Ok(progress) => latest = Some(progress),
+                Err(_) => break,
+            }
+        }
+
+        // ensure the last seen progress is Done
+        match latest {
+            Some(PinProgress::Done) => {}
+            _ => panic!("expected Done"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_update_progress_cid_handles_done() {
+        // Create a temporary DB directory and init the real CidPool
+        let tmp = TempDir::new().unwrap();
+        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap()).unwrap());
+
+        let notifier = Arc::new(MultiNotifier::new());
+        let notif_state = Arc::new(Mutex::new(NotifState::default()));
+        let active_pins = Arc::new(Mutex::new(HashMap::new()));
+        let stalled_pins = Arc::new(Mutex::new(HashSet::new()));
+        let concurrency = Arc::new(Semaphore::new(2));
+
+        // create a channel and push a Done progress so update_progress_cid sees it
+        let (tx, rx) = mpsc::channel::<PinProgress>();
+        tx.send(PinProgress::Done).unwrap();
+        active_pins.lock().await.insert("cidX".to_string(), rx);
+
+        // call the function under test
+        let res = update_progress_cid(
+            &pool,
+            &notifier,
+            &notif_state,
+            active_pins.clone(),
+            stalled_pins.clone(),
+            concurrency.clone(),
+        )
+        .await;
+
+        assert!(res.is_ok());
+
+        // update_progress should have created/updated the db record and set sync_complete
+        let rec = pool
+            .get_pin("cidX")
+            .unwrap()
+            .expect("pin record should exist");
+        assert!(
+            rec.sync_complete,
+            "record must be marked sync_complete after Done"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_notify_change_transitions() {
+        let notifier = Arc::new(MultiNotifier::new());
+        let mut state = NotifState::default();
+
+        // Insert initial OK
+        state
+            .notify_change(&notifier, "cidX".into(), true, "ok", "err")
+            .await;
+        assert_eq!(state.last_status.lock().await.get("cidX"), Some(&true));
+
+        // Transition to failure
+        state
+            .notify_change(&notifier, "cidX".into(), false, "ok", "err")
+            .await;
+        assert_eq!(state.last_status.lock().await.get("cidX"), Some(&false));
+
+        // Transition back to recovery
+        state
+            .notify_change(&notifier, "cidX".into(), true, "ok", "err")
+            .await;
+        assert_eq!(state.last_status.lock().await.get("cidX"), Some(&true));
+    }
+
+    #[tokio::test]
+    async fn test_spawn_pin_task_success_and_duplicate() {
+        let ipfs = Ipfs::new("http://127.0.0.1:5001".into());
+        let active = Arc::new(Mutex::new(HashMap::new()));
+        let pending = Arc::new(Mutex::new(HashSet::new()));
+        let concurrency = Arc::new(Semaphore::new(1));
+
+        let cid = "cidA".to_string();
+
+        // First call inserts task
+        let first = spawn_pin_task(
+            ipfs.clone(),
+            cid.clone(),
+            &active,
+            &pending,
+            concurrency.clone(),
+        )
+        .await;
+        assert!(first);
+        assert!(active.lock().await.contains_key(&cid));
+        assert!(active.lock().await.len() == 1);
+
+        // Second call sees duplicate
+        let second = spawn_pin_task(
+            ipfs.clone(),
+            cid.clone(),
+            &active,
+            &pending,
+            concurrency.clone(),
+        )
+        .await;
+        assert!(!second);
+        assert!(active.lock().await.len() == 1);
+    }
+
+    #[tokio::test]
+    async fn test_spawn_pin_task_pending() {
+        let ipfs = Ipfs::new("http://127.0.0.1:5001".into());
+        let active = Arc::new(Mutex::new(HashMap::new()));
+        let pending = Arc::new(Mutex::new(HashSet::new()));
+        let concurrency = Arc::new(Semaphore::new(0)); // force no permits
+
+        let cid = "cidB".to_string();
+        let result =
+            spawn_pin_task(ipfs, cid.clone(), &active, &pending, concurrency.clone()).await;
+        assert!(!result);
+        assert!(pending.lock().await.contains(&cid));
+        assert!(active.lock().await.len() == 0);
+    }
+
+    #[tokio::test]
+    async fn test_update_progress_cid_handles_error() {
+        let tmp = TempDir::new().unwrap();
+        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap()).unwrap());
+        let notifier = Arc::new(MultiNotifier::new());
+        let notif_state = Arc::new(Mutex::new(NotifState::default()));
+        let active = Arc::new(Mutex::new(HashMap::new()));
+        let stalled = Arc::new(Mutex::new(HashSet::new()));
+        let concurrency = Arc::new(Semaphore::new(1));
+
+        let (tx, rx) = mpsc::channel::<PinProgress>();
+        tx.send(PinProgress::Error("boom".into())).unwrap();
+        active.lock().await.insert("cidErr".to_string(), rx);
+
+        let res = update_progress_cid(
+            &pool,
+            &notifier,
+            &notif_state,
+            active.clone(),
+            stalled.clone(),
+            concurrency.clone(),
+        )
+        .await;
+        assert!(res.is_ok());
+
+        // After error, active should be cleaned up
+        assert!(!active.lock().await.contains_key("cidErr"));
+    }
 }
