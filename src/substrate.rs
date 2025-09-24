@@ -256,7 +256,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn storage_fetch_none_returns_none_2() {
+    async fn storage_fetch_none_returns_none() {
         let mut mock = MockSubxtClient::new();
 
         // Allow health check to succeed
