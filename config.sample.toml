@@ -1,21 +1,14 @@
 [service]
-poll_interval_secs = 60 # how often to check chain for profile CID changes
-reconcile_interval_secs = 300 # run full reconciliation this often
-max_concurrent_ipfs_ops = 8
-retry_max_elapsed_secs = 600
+poll_interval_secs = 12 # how often to check chain for profile CID changes
+reconcile_interval_secs = 6 # run full reconciliation this often
 ipfs_gc_interval_secs = 3600
-
 
 [db]
 path = "./miner_db_pool"
 
-
 [ipfs]
 # Kubo API endpoint
 api_url = "http://127.0.0.1:5001"
-# Optional IPFS HTTP Gateway used only for profile JSON fetch (fallback to /api/v0/cat)
-gateway_url = "http://127.0.0.1:8080"
-
 
 [substrate]
 # WebSocket endpoint for Substrate node

@@ -50,7 +50,7 @@ async fn main() -> Result<()> {
     fmt().with_env_filter(env_filter).json().init();
 
     let cli = Cli::parse();
-    let cfg = settings::load(cli.config.as_deref()).await?;
+    let cfg = settings::load(cli.config.as_deref(), true, true).await?;
     tracing::info!(?cfg, "effective_config");
 
     let pool_location = cfg.db.path.clone();

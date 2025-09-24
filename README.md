@@ -5,9 +5,9 @@ A generated rust service that mirrors the functionality of `thenervelab/miner-ip
 
 - Fetch current **miner profile CID** from a Substrate-based chain (configurable pallet/storage).
 - Download **profile JSON** from IPFS (via Kubo HTTP API) and resolve list of CIDs to **pin**.
-- **Pin** new CIDs, **unpin** removed ones, track state in **SQLite**.
+- **Pin** new CIDs, **unpin** removed ones, track state in **ParityDB**.
 - Periodic **IPFS GC**.
-- Rich **observability** (structured logs via tracing), **CLI**, and **graceful shutdown**.
+- Rich **observability** (structured logs via tracing), **CLI**, **monitoring api**, **notifications** and **graceful shutdown**.
 
 
 ## Quickstart
@@ -31,10 +31,8 @@ cp config.sample.toml config.toml
 ### Sample config (`config.sample.toml`)
 ```toml
 [service]
-poll_interval_secs = 60 # how often to check chain for profile CID changes
+poll_interval_secs = 6 # how often to check chain for profile CID changes
 reconcile_interval_secs = 300 # run full reconciliation this often
-max_concurrent_ipfs_ops = 8
-retry_max_elapsed_secs = 600
 ipfs_gc_interval_secs = 3600
 
 
@@ -45,9 +43,6 @@ path = "./miner.db"
 [ipfs]
 # Kubo API endpoint
 api_url = "http://127.0.0.1:5001"
-# Optional IPFS HTTP Gateway used only for profile JSON fetch (fallback to /api/v0/cat)
-gateway_url = "http://127.0.0.1:8080"
-
 
 [substrate]
 # WebSocket endpoint for Substrate node
@@ -61,7 +56,7 @@ miner_profile_id = "12D3KooWDEfckrwi1YC3Pv9fqwFz8GGpW1xoVPWdu7mEGsjVwSV1"
 
 [telegram]
 bot_token = "YOUR_TELEGRAM_BOT_TOKEN" # eg. 123456789:AAG9RuJiqgOGIfFbOPBpAo6QhIJoD9mCdDs
-# chat_id = "YOUR_CHAT_ID" # chat_id is optional, autodetected if missing
+chat_id = "YOUR_CHAT_ID"
 
 [gmail]
 username = "your@gmail.com"
@@ -69,8 +64,6 @@ app_password = "your apps pass word"
 from = "your@gmail.com"
 to = "alert-recipient@example.com"
 
-# Option B — raw storage key (overrides above if set)
-# raw_storage_key_hex = "26aa394eea5630e07c48ae0c9558cef7..."
 ```
 
 
