@@ -54,7 +54,7 @@ pub async fn run_health_server(
                 };
 
                 // --- Blockchain check ---
-                let blockchain_status = match chain.client().blocks().at_latest().await {
+                let blockchain_status = match chain.client().blocks_at_latest().await {
                     Ok(_) => "OK".to_string(),
                     Err(e) => format!("Error: {e:?}"),
                 };
