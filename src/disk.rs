@@ -66,6 +66,15 @@ pub fn disk_usage() -> Result<(Vec<(u64, u64)>, f64)> {
     disk_usage_with(&mut provider)
 }
 
+//          //          //          //          //          //          //          //          //          //          //          //
+
+//                      //                      //                      //                                  //                      //
+
+//                      //                      //          //          //          //                      //                      //
+
+//                      //                      //                                  //                      //                      //
+
+//                      //                      //          //          //          //                      //                      //
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -85,12 +94,18 @@ mod tests {
     #[serial_test::serial]
     #[test]
     fn cwd_not_in_any_disk_returns_404() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tempdir().unwrap();
         env::set_current_dir(tmp.path()).unwrap();
 
         let mut mock = MockDiskProvider {
-            // some mount unrelated to tmp
-            disks: vec![(100, 200, PathBuf::from("Z:/0000000/unrelated/mount"))],
+            // unrelated mount (canonicalized for macOS safety)
+            disks: vec![(
+                100,
+                200,
+                PathBuf::from("/unrelated/mount")
+                    .canonicalize()
+                    .unwrap_or_else(|_| PathBuf::from("/unrelated/mount")),
+            )],
         };
 
         let (_disks, usage) = disk_usage_with(&mut mock).unwrap();
@@ -100,60 +115,62 @@ mod tests {
     #[serial_test::serial]
     #[test]
     fn cwd_in_disk_mount_returns_percentage() {
-        // Create ONE tempdir and reuse it
         let tmp = tempdir().unwrap();
-        let mount_point = tmp.path().to_path_buf();
+        let mount_point = tmp.path().canonicalize().unwrap();
 
-        // Subdir inside the SAME mount_point
         let cwd = mount_point.join("subdir");
         std::fs::create_dir_all(&cwd).unwrap();
         env::set_current_dir(&cwd).unwrap();
-
-        // Debugging
-        let cwd_actual = env::current_dir().unwrap();
-        eprintln!("mount_point = {:?}", mount_point);
-        eprintln!("cwd_actual   = {:?}", cwd_actual);
-
-        assert!(
-            cwd_actual.starts_with(&mount_point),
-            "cwd ({:?}) did not start with mount ({:?})",
-            cwd_actual,
-            mount_point
-        );
 
         let mut mock = MockDiskProvider {
             disks: vec![(50, 100, mount_point.clone())],
         };
 
+        // Debug info if it fails on CI
+        let cwd_actual = env::current_dir().unwrap();
+        eprintln!("mount_point = {:?}", mount_point);
+        eprintln!("cwd_actual   = {:?}", cwd_actual);
+
         let (_disks, usage) = disk_usage_with(&mut mock).unwrap();
-        assert_eq!(usage, 50.0);
+        assert_eq!(
+            usage, 50.0,
+            "cwd ({:?}) did not match mount ({:?})",
+            cwd_actual, mount_point
+        );
     }
 
     #[serial_test::serial]
     #[test]
     fn result_contains_all_disks() {
         let tmp = tempdir().unwrap();
-        let mount_point = tmp.path().to_path_buf();
+        let mount_point = tmp.path().canonicalize().unwrap();
 
-        // Make sure cwd is inside the first mount
         let cwd = mount_point.join("zero");
         std::fs::create_dir_all(&cwd).unwrap();
         env::set_current_dir(&cwd).unwrap();
 
         let mut mock = MockDiskProvider {
             disks: vec![
-                (50, 100, mount_point.clone()),           // cwd is here → usage = 50.0
-                (30, 60, PathBuf::from("/other/mount")),  // extra disk
-                (70, 140, PathBuf::from("/yet/another")), // another extra disk
+                (50, 100, mount_point.clone()),
+                (
+                    30,
+                    60,
+                    PathBuf::from("/other/mount")
+                        .canonicalize()
+                        .unwrap_or_else(|_| PathBuf::from("/other/mount")),
+                ),
+                (
+                    10,
+                    20,
+                    PathBuf::from("/yet/another/mount")
+                        .canonicalize()
+                        .unwrap_or_else(|_| PathBuf::from("/yet/another/mount")),
+                ),
             ],
         };
 
         let (disks, usage) = disk_usage_with(&mut mock).unwrap();
-
-        // All disks must be reported
-        assert_eq!(disks, vec![(50, 100), (30, 60), (70, 140)]);
-
-        // Usage comes from the mount that contains cwd (the first one)
+        assert_eq!(disks, vec![(50, 100), (30, 60), (10, 20)]);
         assert_eq!(usage, 50.0);
     }
 
@@ -161,7 +178,7 @@ mod tests {
     #[test]
     fn does_not_panic_if_total_space_is_zero() {
         let tmp = tempdir().unwrap();
-        let mount_point = tmp.path().to_path_buf();
+        let mount_point = tmp.path().canonicalize().unwrap();
 
         let cwd = mount_point.join("zero");
         std::fs::create_dir_all(&cwd).unwrap();
@@ -178,6 +195,7 @@ mod tests {
     #[serial_test::serial]
     #[test]
     fn returns_disks_and_usage_in_valid_range() {
+        let _tmp = tempdir().unwrap(); // keep alive
         let (disks, usage) = disk_usage().unwrap();
         assert!(!disks.is_empty());
 
