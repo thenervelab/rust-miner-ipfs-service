@@ -61,9 +61,8 @@ pub async fn run_health_server(
 
                 // --- Disk usage check ---
                 let disk_status = match disk_usage() {
-                    Ok((disks, _)) if !disks.is_empty() => "OK".to_string(),
-                    Ok(_) => "Error: no disks found".to_string(),
-                    Err(e) => format!("Error: {e:?}"),
+                    (disks, _) if !disks.is_empty() => "OK".to_string(),
+                    _ => "Error: no disks found".to_string(),
                 };
 
                 // --- Pin verification ---

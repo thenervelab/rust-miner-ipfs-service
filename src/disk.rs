@@ -44,24 +44,36 @@ impl DiskProvider for SysDiskProvider {
     }
 }
 
-pub fn disk_usage_with<P: DiskProvider>(provider: &mut P) -> Result<(Vec<(u64, u64)>, f64)> {
+pub fn disk_usage_with<P: DiskProvider>(provider: &mut P) -> (Vec<(u64, u64)>, f64) {
     provider.refresh();
     let disks = provider.disks();
 
     let result: Vec<(u64, u64)> = disks.iter().map(|(a, t, _)| (*a, *t)).collect();
 
-    let cwd = env::current_dir()?; // no canonicalize
+    let cwd = match env::current_dir() {
+        Ok(dir) => dir,
+        Err(_) => return (result, 404.0),
+    };
 
     for (avail, total, mount) in disks {
-        if total > 0 && cwd.starts_with(&mount) {
-            return Ok((result, (avail as f64 / total as f64) * 100.0));
+        if total == 0 {
+            continue;
+        }
+
+        let mount_cmp = match mount.canonicalize() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        if cwd.starts_with(&mount_cmp) {
+            return (result, (avail as f64 / total as f64) * 100.0);
         }
     }
 
-    Ok((result, 404.0))
+    (result, 404.0)
 }
 
-pub fn disk_usage() -> Result<(Vec<(u64, u64)>, f64)> {
+pub fn disk_usage() -> (Vec<(u64, u64)>, f64) {
     let mut provider = SysDiskProvider::new();
     disk_usage_with(&mut provider)
 }
@@ -108,7 +120,7 @@ mod tests {
             )],
         };
 
-        let (_disks, usage) = disk_usage_with(&mut mock).unwrap();
+        let (_disks, usage) = disk_usage_with(&mut mock);
         assert_eq!(usage, 404.0);
     }
 
@@ -131,7 +143,7 @@ mod tests {
         eprintln!("mount_point = {:?}", mount_point);
         eprintln!("cwd_actual   = {:?}", cwd_actual);
 
-        let (_disks, usage) = disk_usage_with(&mut mock).unwrap();
+        let (_disks, usage) = disk_usage_with(&mut mock);
         assert_eq!(
             usage, 50.0,
             "cwd ({:?}) did not match mount ({:?})",
@@ -169,7 +181,7 @@ mod tests {
             ],
         };
 
-        let (disks, usage) = disk_usage_with(&mut mock).unwrap();
+        let (disks, usage) = disk_usage_with(&mut mock);
         assert_eq!(disks, vec![(50, 100), (30, 60), (10, 20)]);
         assert_eq!(usage, 50.0);
     }
@@ -188,7 +200,7 @@ mod tests {
             disks: vec![(0, 0, mount_point.clone())], // total = 0
         };
 
-        let (_disks, usage) = disk_usage_with(&mut mock).unwrap();
+        let (_disks, usage) = disk_usage_with(&mut mock);
         assert_eq!(usage, 404.0);
     }
 
@@ -196,7 +208,8 @@ mod tests {
     #[test]
     fn returns_disks_and_usage_in_valid_range() {
         let _tmp = tempdir().unwrap(); // keep alive
-        let (disks, usage) = disk_usage().unwrap();
+
+        let (disks, usage) = disk_usage();
         assert!(!disks.is_empty());
 
         for (avail, total) in &disks {
@@ -215,7 +228,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         env::set_current_dir(tmp.path()).unwrap();
 
-        let (_disks, usage) = disk_usage().unwrap();
+        let (_disks, usage) = disk_usage();
 
         assert!(
             (0.0..=100.0).contains(&usage) || (usage - 404.0).abs() < f64::EPSILON,

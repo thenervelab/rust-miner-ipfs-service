@@ -555,10 +555,7 @@ pub async fn reconcile_once(
         _ => {}
     };
 
-    let (disks, _program_location_disk_usage) = match disk_usage() {
-        Ok((v, f)) => (v, f),
-        _ => (vec![], 404.0),
-    };
+    let (disks, _program_location_disk_usage) = disk_usage();
 
     for i in 0..disks.len() {
         let available = disks[i].0 as f64 / disks[i].1 as f64 * 100.0;
