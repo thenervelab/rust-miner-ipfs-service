@@ -16,7 +16,7 @@ pub struct FileInfo {
     pub size_bytes: u64,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct PinState {
     #[serde(rename = "Cid")]
     pub cid: String,
@@ -30,7 +30,7 @@ pub struct PinState {
     pub pin_status: Option<PinStatus>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct PinStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "BadNodes")]
@@ -39,7 +39,7 @@ pub struct PinStatus {
     pub ok: bool,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct BadNode {
     #[serde(rename = "Cid")]
     pub cid: String,

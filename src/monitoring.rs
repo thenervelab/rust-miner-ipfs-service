@@ -22,7 +22,7 @@ struct HealthStatus {
 }
 
 pub async fn run_health_server(
-    ipfs: IpfsClient,
+    ipfs: Arc<IpfsClient>,
     chain: Chain,
     notifier: Arc<MultiNotifier>,
     bind_addr: &str,

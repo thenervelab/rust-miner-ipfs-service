@@ -10,6 +10,7 @@ mod substrate;
 
 use crate::{
     db::CidPool,
+    ipfs::Client as Ipfs,
     service::{ActiveTask, NotifState, PinSet},
 };
 use anyhow::Result;
@@ -70,10 +71,11 @@ async fn main() -> Result<()> {
             let pending_pins: PinSet = Arc::new(Mutex::new(HashSet::new()));
             let _stalled_pins: PinSet = Arc::new(Mutex::new(HashSet::new()));
             let concurrency = Arc::new(tokio::sync::Semaphore::new(8)); // start with 8
+            let ipfs = Arc::new(Ipfs::new(cfg.ipfs.api_url.clone()));
 
             service::reconcile_once(
-                &cfg,
                 &pool,
+                &ipfs,
                 &notifier,
                 &mut notif_state,
                 active_pins.clone(),

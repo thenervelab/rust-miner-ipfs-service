@@ -16,6 +16,19 @@ pub struct Client {
     http: reqwest::Client,
 }
 
+#[async_trait::async_trait]
+pub trait IpfsClient: Send + Sync {
+    async fn cat_json<T: serde::de::DeserializeOwned + Send>(&self, cid: &str) -> Result<T>;
+    async fn pin_add_with_progress(&self, cid: &str, tx: ProgressSender) -> Result<()>;
+    async fn pin_rm(&self, cid: &str) -> Result<()>;
+    async fn pin_verify(&self) -> Result<Vec<PinState>>;
+    #[allow(dead_code)]
+    async fn gc(&self) -> Result<()>;
+    #[allow(dead_code)]
+    async fn check_health(&self) -> Result<()>;
+    async fn pin_ls_all(&self) -> Result<HashSet<String>>;
+}
+
 impl Client {
     pub fn new(api_url: String) -> Self {
         let base = Url::parse(&api_url).expect("invalid ipfs api url");
@@ -212,6 +225,36 @@ impl Client {
     }
 }
 
+#[async_trait::async_trait]
+impl IpfsClient for Client {
+    async fn cat_json<T: serde::de::DeserializeOwned + Send>(&self, cid: &str) -> Result<T> {
+        self.cat_json(cid).await
+    }
+
+    async fn pin_add_with_progress(&self, cid: &str, tx: ProgressSender) -> anyhow::Result<()> {
+        self.pin_add_with_progress(cid, tx).await
+    }
+
+    async fn pin_rm(&self, cid: &str) -> Result<()> {
+        self.pin_rm(cid).await
+    }
+
+    async fn pin_verify(&self) -> Result<Vec<PinState>> {
+        self.pin_verify().await
+    }
+
+    async fn pin_ls_all(&self) -> Result<HashSet<String>> {
+        self.pin_ls_all().await
+    }
+
+    async fn gc(&self) -> Result<()> {
+        self.gc().await
+    }
+
+    async fn check_health(&self) -> Result<()> {
+        self.check_health().await
+    }
+}
 //          //          //          //          //          //          //          //          //          //          //          //
 
 //                      //                      //                      //                                  //                      //

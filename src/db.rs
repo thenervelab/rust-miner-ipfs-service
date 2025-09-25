@@ -13,6 +13,18 @@ use std::{
 
 use crate::service::PinProgress;
 
+pub trait PoolTrait: Send + Sync {
+    fn sync_pins(&self, cids: Vec<String>) -> Result<Vec<String>>;
+    fn merge_pins(&self, cids: &HashSet<String>) -> Result<()>;
+    #[allow(dead_code)]
+    fn update_progress(&self, updates: &HashMap<String, PinProgress>) -> Result<HashSet<String>>;
+    #[allow(dead_code)]
+    fn touch_all_progress(&self) -> Result<()>;
+    fn get_profile(&self) -> Result<Option<String>>;
+    fn touch_progress(&self, cid: &str) -> Result<()>;
+    fn record_failure(&self, cid: Option<&str>, action: &str, error: &str) -> Result<()>;
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PinRecord {
     pub last_progress: u64,
@@ -322,6 +334,31 @@ impl CidPool {
         }
 
         Ok(())
+    }
+}
+
+impl PoolTrait for CidPool {
+    fn sync_pins(&self, cids: Vec<String>) -> Result<Vec<String>> {
+        self.sync_pins(cids)
+    }
+    fn merge_pins(&self, cids: &HashSet<String>) -> Result<()> {
+        self.merge_pins(cids)
+    }
+    fn update_progress(&self, updates: &HashMap<String, PinProgress>) -> Result<HashSet<String>> {
+        self.update_progress(updates)
+    }
+    fn touch_all_progress(&self) -> Result<()> {
+        self.touch_all_progress()
+    }
+
+    fn get_profile(&self) -> Result<Option<String>> {
+        self.get_profile()
+    }
+    fn touch_progress(&self, cid: &str) -> Result<()> {
+        self.touch_progress(cid)
+    }
+    fn record_failure(&self, cid: Option<&str>, action: &str, error: &str) -> Result<()> {
+        self.record_failure(cid, action, error)
     }
 }
 
