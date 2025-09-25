@@ -10,7 +10,7 @@ mod substrate;
 
 use crate::{
     db::CidPool,
-    service::{NotifState, PinSet, ProgressReceiver},
+    service::{ActiveTask, NotifState, PinSet},
 };
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
         Commands::Run => service::run(cfg, pool, notifier).await?,
         Commands::Reconcile => {
             let mut notif_state = Arc::new(Mutex::new(NotifState::default()));
-            let active_pins: Arc<Mutex<HashMap<String, ProgressReceiver>>> =
+            let active_pins: Arc<Mutex<HashMap<String, ActiveTask>>> =
                 Arc::new(Mutex::new(HashMap::new()));
             let pending_pins: PinSet = Arc::new(Mutex::new(HashSet::new()));
             let _stalled_pins: PinSet = Arc::new(Mutex::new(HashSet::new()));

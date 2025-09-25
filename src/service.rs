@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Context, Result};
 
 use tokio::{
-    sync::{Mutex, Notify, Semaphore},
+    sync::{Mutex, Notify, OwnedSemaphorePermit, Semaphore, oneshot},
     time,
     time::sleep,
 };
@@ -25,6 +25,12 @@ use crate::{
 #[derive(Default)]
 pub struct NotifState {
     last_status: Arc<Mutex<HashMap<String, bool>>>, // true = OK, false = error
+}
+
+pub struct ActiveTask {
+    progress_rx: ProgressReceiver,
+    cancel_tx: oneshot::Sender<()>,
+    permit: Option<OwnedSemaphorePermit>, // keeps semaphore slot
 }
 
 pub enum PinProgress {
@@ -109,8 +115,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
 
     let mut chain_uninited: Option<Chain> = None;
 
-    let active_pins: Arc<Mutex<HashMap<String, ProgressReceiver>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    let active_pins: Arc<Mutex<HashMap<String, ActiveTask>>> = Arc::new(Mutex::new(HashMap::new()));
 
     let pending_pins: PinSet = Arc::new(Mutex::new(HashSet::new()));
     let stalled_pins: PinSet = Arc::new(Mutex::new(HashSet::new()));
@@ -417,7 +422,7 @@ pub async fn reconcile_once(
     pool: &Arc<CidPool>,
     notifier: &Arc<MultiNotifier>,
     notif_state: &Arc<Mutex<NotifState>>,
-    active_pins: Arc<Mutex<HashMap<String, ProgressReceiver>>>,
+    active_pins: Arc<Mutex<HashMap<String, ActiveTask>>>,
     pending_pins: PinSet,
     concurrency: Arc<Semaphore>,
 ) -> Result<()> {
@@ -498,7 +503,9 @@ pub async fn reconcile_once(
                 };
                 {
                     let mut active = active_pins_map.lock().await;
-                    active.remove(&cid);
+                    if let Some(task) = active.remove(&cid) {
+                        let _ = task.cancel_tx.send(());
+                    }
                 }
 
                 Ok(())
@@ -597,7 +604,7 @@ pub async fn reconcile_once(
 async fn spawn_pin_task(
     ipfs: Ipfs,
     cid: String,
-    active_pins: &Arc<Mutex<HashMap<String, ProgressReceiver>>>,
+    active_pins: &Arc<Mutex<HashMap<String, ActiveTask>>>,
     pending_pins: &PinSet,
     concurrency: Arc<Semaphore>,
 ) -> bool {
@@ -610,17 +617,43 @@ async fn spawn_pin_task(
     // Try get a permit without waiting
     if let Ok(permit) = concurrency.clone().try_acquire_owned() {
         let (tx, rx) = mpsc::channel();
-        active.insert(cid.clone(), rx);
+        let (cancel_tx, cancel_rx) = oneshot::channel();
+
+        // Store in map before spawn
+        active.insert(
+            cid.clone(),
+            ActiveTask {
+                progress_rx: rx,
+                cancel_tx: cancel_tx,
+                permit: Some(permit),
+            },
+        );
 
         tokio::spawn({
-            tracing::info!("Starting new pin task for CID: {}", cid);
             let ipfs = ipfs.clone();
+            let cid = cid.clone();
+            let active_map = active_pins.clone();
+
             async move {
-                let _res = ipfs.pin_add_with_progress(&cid, tx).await;
-                drop(permit);
+                tokio::select! {
+                    res = ipfs.pin_add_with_progress(&cid, tx) => {
+                        if let Err(e) = res {
+                            tracing::error!("pinning {} failed: {:?}", cid, e);
+                        }
+
+                        let mut active = active_map.lock().await;
+                        if let Some(task) = active.get_mut(&cid) {
+                            task.permit.take(); // drops OwnedSemaphorePermit, frees slot
+                        }
+                    }
+
+                    _ = cancel_rx => {
+                        tracing::info!("pinning {} canceled", cid);
+                        // Exit early, permit will be dropped when ActiveTask is removed
+                    }
+                }
             }
         });
-
         return true;
     } else {
         // No slot available → mark as pending
@@ -637,7 +670,7 @@ pub async fn update_progress_cid(
     pool: &Arc<CidPool>,
     notifier: &Arc<MultiNotifier>,
     notif_state: &Arc<Mutex<NotifState>>,
-    active_pins: Arc<Mutex<HashMap<String, ProgressReceiver>>>,
+    active_pins: Arc<Mutex<HashMap<String, ActiveTask>>>,
     stalled_pins: PinSet,
     concurrency: Arc<Semaphore>,
 ) -> Result<()> {
@@ -648,10 +681,10 @@ pub async fn update_progress_cid(
     tracing::info!("{} Active pins", active.len());
     let mut updates = HashMap::new();
 
-    for (cid, rx) in active.iter_mut() {
+    for (cid, task) in active.iter_mut() {
         let mut latest: Option<PinProgress> = None;
 
-        while let Ok(progress) = rx.try_recv() {
+        while let Ok(progress) = task.progress_rx.try_recv() {
             latest = Some(progress);
         }
 
@@ -743,7 +776,9 @@ pub async fn update_progress_cid(
     }
 
     for cid in errored {
-        active.remove(&cid);
+        if let Some(task) = active.remove(&cid) {
+            let _ = task.cancel_tx.send(());
+        }
         concurrency.add_permits(1);
     }
 
@@ -815,25 +850,31 @@ mod tests {
 
     #[tokio::test]
     async fn test_progress_receiver_flow() {
-        // Use std::sync::mpsc because your code's ProgressReceiver is that type.
         let (tx, rx) = mpsc::channel::<PinProgress>();
 
-        // store a receiver in the HashMap just like your runtime does
-        let mut active_pins: HashMap<String, ProgressReceiver> = HashMap::new();
-        active_pins.insert("cidA".to_string(), rx);
+        let mut active_pins: HashMap<String, ActiveTask> = HashMap::new();
+        let (cancel_tx, _cancel_rx) = oneshot::channel();
+
+        active_pins.insert(
+            "cidA".to_string(),
+            ActiveTask {
+                progress_rx: rx,
+                cancel_tx,
+                permit: None, // no semaphore needed in this test
+            },
+        );
 
         // push updates into the sender (synchronous)
         tx.send(PinProgress::Blocks(5)).unwrap();
         tx.send(PinProgress::Done).unwrap();
 
-        // pull the receiver back out and drain it (non-blocking)
-        let rx = active_pins.remove("cidA").unwrap();
-
         let mut latest: Option<PinProgress> = None;
-        loop {
-            match rx.try_recv() {
-                Ok(progress) => latest = Some(progress),
-                Err(_) => break,
+        if let Some(task) = active_pins.remove("cidA") {
+            loop {
+                match task.progress_rx.try_recv() {
+                    Ok(progress) => latest = Some(progress),
+                    Err(_) => break,
+                }
             }
         }
 
@@ -855,11 +896,19 @@ mod tests {
         let stalled_pins = Arc::new(Mutex::new(HashSet::new()));
         let concurrency = Arc::new(Semaphore::new(2));
 
-        // create a channel and push a Block and Done progress so update_progress_cid sees it
         let (tx, rx) = mpsc::channel::<PinProgress>();
         tx.send(PinProgress::Blocks(42)).unwrap();
         tx.send(PinProgress::Done).unwrap();
-        active_pins.lock().await.insert("cidX".to_string(), rx);
+
+        let (cancel_tx, _cancel_rx) = oneshot::channel();
+        active_pins.lock().await.insert(
+            "cidX".to_string(),
+            ActiveTask {
+                progress_rx: rx,
+                cancel_tx,
+                permit: None,
+            },
+        );
 
         // call the function under test
         let res = update_progress_cid(
@@ -897,7 +946,16 @@ mod tests {
 
         let (tx, rx) = mpsc::channel::<PinProgress>();
         tx.send(PinProgress::Error("boom".into())).unwrap();
-        active.lock().await.insert("cidErr".to_string(), rx);
+
+        let (cancel_tx, _cancel_rx) = oneshot::channel();
+        active.lock().await.insert(
+            "cidErr".to_string(),
+            ActiveTask {
+                progress_rx: rx,
+                cancel_tx,
+                permit: None,
+            },
+        );
 
         let res = update_progress_cid(
             &pool,

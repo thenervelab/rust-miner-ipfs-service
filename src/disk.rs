@@ -1,4 +1,3 @@
-use anyhow::Result;
 use std::env;
 use std::path::PathBuf;
 use sysinfo::{DiskExt, System, SystemExt};
