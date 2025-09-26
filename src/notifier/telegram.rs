@@ -7,7 +7,6 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 struct TelegramUpdate {
-    //    update_id: i64,
     message: Option<TelegramMessage>,
 }
 
@@ -25,16 +24,25 @@ pub struct TelegramNotifier {
     bot_token: String,
     chat_id: String,
     client: Client,
+    base_url: String,
 }
 
 impl TelegramNotifier {
     pub async fn new(bot_token: String, chat_id: Option<String>) -> Result<Self> {
+        Self::with_base_url(bot_token, chat_id, "https://api.telegram.org".to_string()).await
+    }
+
+    pub async fn with_base_url(
+        bot_token: String,
+        chat_id: Option<String>,
+        base_url: String,
+    ) -> Result<Self> {
         let client = Client::new();
         let chat_id = match chat_id {
             Some(id) => id,
             None => {
                 // Try to fetch from getUpdates
-                let url = format!("https://api.telegram.org/bot{}/getUpdates", bot_token);
+                let url = format!("{}/bot{}/getUpdates", base_url, bot_token);
                 let resp = client
                     .get(&url)
                     .send()
@@ -57,7 +65,8 @@ impl TelegramNotifier {
         Ok(Self {
             bot_token,
             chat_id,
-            client: client,
+            client,
+            base_url,
         })
     }
 }
@@ -66,7 +75,7 @@ impl TelegramNotifier {
 impl Notifier for TelegramNotifier {
     async fn notify(&self, subject: &str, message: &str) -> Result<()> {
         let text = format!("🚨 {}\n{}", subject, message);
-        let url = format!("https://api.telegram.org/bot{}/sendMessage", self.bot_token);
+        let url = format!("{}/bot{}/sendMessage", self.base_url, self.bot_token);
         self.client
             .post(&url)
             .json(&serde_json::json!({"chat_id": self.chat_id, "text": text}))
@@ -82,5 +91,79 @@ impl Notifier for TelegramNotifier {
 
     fn is_healthy(&self) -> Result<(&str, bool)> {
         Ok((self.name(), true))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use httpmock::prelude::*;
+
+    #[tokio::test]
+    async fn test_new_with_chat_id() {
+        let n = TelegramNotifier::new("token".to_string(), Some("123".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(n.chat_id, "123");
+    }
+
+    #[tokio::test]
+    async fn test_new_fetches_chat_id() {
+        let server = MockServer::start();
+        let m = server.mock(|when, then| {
+            when.method(GET).path("/botTOKEN/getUpdates");
+            then.status(200).json_body(serde_json::json!({
+                "ok": true,
+                "result": [{
+                    "message": { "chat": { "id": 42 } }
+                }]
+            }));
+        });
+
+        let n = TelegramNotifier::with_base_url("TOKEN".to_string(), None, server.base_url())
+            .await
+            .unwrap();
+        assert_eq!(n.chat_id, "42");
+        m.assert();
+    }
+
+    #[tokio::test]
+    async fn test_notify_sends_message() {
+        let server = MockServer::start();
+        let m = server.mock(|when, then| {
+            when.method(POST)
+                .path("/botTOKEN/sendMessage")
+                .json_body(serde_json::json!({
+                    "chat_id": "42",
+                    "text": "🚨 subject\nbody"
+                }));
+            then.status(200).json_body(serde_json::json!({"ok": true}));
+        });
+
+        let n = TelegramNotifier {
+            bot_token: "TOKEN".to_string(),
+            chat_id: "42".to_string(),
+            client: Client::new(),
+            base_url: server.base_url(),
+        };
+
+        let res = n.notify("subject", "body").await;
+        assert!(res.is_ok());
+        m.assert();
+    }
+
+    #[test]
+    fn test_name_and_health() {
+        let n = TelegramNotifier {
+            bot_token: "T".to_string(),
+            chat_id: "C".to_string(),
+            client: Client::new(),
+            base_url: "http://localhost".to_string(),
+        };
+
+        assert_eq!(n.name(), "telegram");
+        let (name, healthy) = n.is_healthy().unwrap();
+        assert_eq!(name, "telegram");
+        assert!(healthy);
     }
 }

@@ -67,3 +67,100 @@ pub async fn build_notifier_from_config(cfg: &crate::settings::Settings) -> Resu
     }
     Ok(m)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+    use async_trait::async_trait;
+    use std::sync::{Arc, Mutex};
+
+    struct MockNotifier {
+        name: &'static str,
+        should_fail: bool,
+        notified: Arc<Mutex<Vec<(String, String)>>>,
+    }
+
+    #[async_trait]
+    impl Notifier for MockNotifier {
+        async fn notify(&self, subject: &str, message: &str) -> Result<()> {
+            if self.should_fail {
+                anyhow::bail!("forced failure");
+            }
+            self.notified
+                .lock()
+                .unwrap()
+                .push((subject.to_string(), message.to_string()));
+            Ok(())
+        }
+
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        fn is_healthy(&self) -> Result<(&str, bool)> {
+            Ok((self.name, !self.should_fail))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_notify_all_success() {
+        let notified = Arc::new(Mutex::new(vec![]));
+        let n = MockNotifier {
+            name: "mock",
+            should_fail: false,
+            notified: notified.clone(),
+        };
+
+        let mut m = MultiNotifier::new();
+        m.add(Box::new(n));
+
+        m.notify_all("subj", "msg").await;
+
+        let items = notified.lock().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0], ("subj".to_string(), "msg".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_notify_all_error_doesnt_break() {
+        let notified = Arc::new(Mutex::new(vec![]));
+        let n1 = MockNotifier {
+            name: "ok",
+            should_fail: false,
+            notified: notified.clone(),
+        };
+        let n2 = MockNotifier {
+            name: "fail",
+            should_fail: true,
+            notified: notified.clone(),
+        };
+
+        let mut m = MultiNotifier::new();
+        m.add(Box::new(n1));
+        m.add(Box::new(n2));
+
+        m.notify_all("s", "m").await;
+
+        // one success, one fail
+        assert_eq!(notified.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_health_check() {
+        let notified = Arc::new(Mutex::new(vec![]));
+        let n = MockNotifier {
+            name: "mock",
+            should_fail: false,
+            notified,
+        };
+        let mut m = MultiNotifier::new();
+        m.add(Box::new(n));
+
+        let statuses = m.health_check();
+        assert_eq!(statuses.len(), 1);
+        let (name, healthy) = statuses[0].as_ref().unwrap();
+        assert_eq!(*name, "mock");
+        assert!(healthy);
+    }
+}
