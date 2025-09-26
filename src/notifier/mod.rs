@@ -68,6 +68,16 @@ pub async fn build_notifier_from_config(cfg: &crate::settings::Settings) -> Resu
     Ok(m)
 }
 
+//          //          //          //          //          //          //          //          //          //          //          //
+
+//                      //                      //                      //                                  //                      //
+
+//                      //                      //          //          //          //                      //                      //
+
+//                      //                      //                                  //                      //                      //
+
+//                      //                      //          //          //          //                      //                      //
+
 #[cfg(test)]
 mod tests {
     use super::*;
