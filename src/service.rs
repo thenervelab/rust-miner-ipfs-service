@@ -810,8 +810,8 @@ pub async fn update_progress_cid(
 
 //                      //                      //          //          //          //                      //                      //
 
-#[cfg(test)]
-mod tests {
+#[cfg(any(test))]
+pub mod tests {
     use super::*;
     use std::collections::{HashMap, HashSet};
     use std::sync::{Arc, mpsc};
@@ -1131,7 +1131,8 @@ mod tests {
         pub cat_json_result: Result<serde_json::Value>,
         pub pin_rm_result: Result<()>,
         pub pin_verify_result: Result<Vec<PinState>>,
-        pub pin_ls_all_result: Result<HashSet<String>>, // 👈 add this
+        pub pin_ls_all_result: Result<HashSet<String>>,
+        pub health_ok: bool,
     }
 
     impl Default for DummyIpfs {
@@ -1141,23 +1142,13 @@ mod tests {
                 pin_rm_result: Ok(()),
                 pin_verify_result: Ok(vec![]),
                 pin_ls_all_result: Ok(HashSet::new()),
+                health_ok: true,
             }
         }
     }
 
     #[async_trait]
     impl IpfsClient for DummyIpfs {
-        // async fn cat_json<T>(&self, _cid: &str) -> Result<T>
-        // where
-        //     T: serde::de::DeserializeOwned + Send,
-        // {
-        //     let val = self
-        //         .cat_json_result
-        //         .clone()
-        //         .expect("cat_json_result not set in DummyIpfs");
-        //     Ok(serde_json::from_value(val)?)
-        // }
-
         async fn cat_json<T>(&self, _cid: &str) -> Result<T>
         where
             T: serde::de::DeserializeOwned + Send,
@@ -1195,7 +1186,11 @@ mod tests {
         }
 
         async fn check_health(&self) -> Result<()> {
-            Ok(())
+            if self.health_ok {
+                Ok(())
+            } else {
+                Err(anyhow::anyhow!("ipfs down"))
+            }
         }
 
         async fn pin_ls_all(&self) -> Result<HashSet<String>> {
@@ -1259,6 +1254,7 @@ mod tests {
             pin_rm_result: Ok(()),
             pin_verify_result: Ok(vec![]),
             pin_ls_all_result: Ok(HashSet::new()),
+            health_ok: true,
         });
         let notifier = Arc::new(MultiNotifier::new());
         let notif_state = Arc::new(Mutex::new(NotifState::default()));
@@ -1290,6 +1286,7 @@ mod tests {
             cat_json_result: Ok(serde_json::json!({"foo": "bar"})),
             pin_rm_result: Ok(()),
             pin_verify_result: Ok(vec![]),
+            health_ok: true,
         });
         let notifier = Arc::new(MultiNotifier::new());
         let notif_state = Arc::new(Mutex::new(NotifState::default()));
@@ -1371,6 +1368,7 @@ mod tests {
             pin_rm_result: Ok(()),
             pin_verify_result: Ok(vec![]),
             pin_ls_all_result: Ok(HashSet::new()),
+            health_ok: true,
         });
 
         let ipfs_high = Arc::new(DummyIpfs {
@@ -1378,6 +1376,7 @@ mod tests {
             pin_rm_result: Ok(()),
             pin_verify_result: Ok(vec![]),
             pin_ls_all_result: Ok(HashSet::new()),
+            health_ok: true,
         });
 
         let notifier = Arc::new(MultiNotifier::new());

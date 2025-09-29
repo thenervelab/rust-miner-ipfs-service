@@ -340,3 +340,57 @@ mod tests {
         assert_eq!(got, Some("profile-cid".to_string()));
     }
 }
+
+#[cfg(test)]
+pub mod test_utils {
+    use super::*; // bring in Chain, SubxtClient, DefaultAddress, etc.
+    use async_trait::async_trait;
+    use std::sync::Arc;
+
+    pub struct DummySubxtClient {
+        pub ok: bool,
+        pub profile: Option<anyhow::Result<Option<String>>>,
+    }
+
+    #[async_trait]
+    impl SubxtClient for DummySubxtClient {
+        async fn blocks_at_latest(&self) -> anyhow::Result<()> {
+            if self.ok {
+                Ok(())
+            } else {
+                Err(anyhow::anyhow!("chain down"))
+            }
+        }
+
+        async fn fetch_raw(&self, _key: Vec<u8>) -> anyhow::Result<Option<Vec<u8>>> {
+            Ok(None)
+        }
+
+        async fn fetch_storage(
+            &self,
+            _addr: DefaultAddress<
+                Vec<dynamic::Value>,
+                dynamic::DecodedValueThunk,
+                subxt::utils::Yes,
+                subxt::utils::Yes,
+                subxt::utils::Yes,
+            >,
+        ) -> anyhow::Result<Option<Vec<u8>>> {
+            match &self.profile {
+                Some(Ok(Some(cid))) => Ok(Some(cid.clone().into_bytes())),
+                Some(Ok(None)) => Ok(None),
+                Some(Err(e)) => Err(anyhow::anyhow!(e.to_string())),
+                None => Ok(None),
+            }
+        }
+    }
+
+    impl Chain {
+        pub fn dummy(ok: bool, profile: Option<anyhow::Result<Option<String>>>) -> Self {
+            Self {
+                client: Arc::new(DummySubxtClient { ok, profile }),
+                url: "ws://dummy".to_string(),
+            }
+        }
+    }
+}
