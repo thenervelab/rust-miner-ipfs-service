@@ -121,7 +121,7 @@ To run the service continuously in the background and start automatically on boo
 Build your release binary and move it into a permanent location (e.g., `/opt/miner-ipfs-service`):
 
 bash
-´´´
+```
 # Build release binary (or download release)
 cargo build --release
 
