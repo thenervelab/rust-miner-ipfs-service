@@ -132,10 +132,9 @@ sudo mkdir -p /opt/miner-ipfs-service
 
 sudo cp ./target/release/miner-ipfs-service /opt/miner-ipfs-service/
 sudo cp ./config.sample.toml /opt/miner-ipfs-service/config.toml
-```
 
 # Make sure it’s executable
-```
+
 sudo chmod +x /opt/miner-ipfs-service/miner-ipfs-service
 ```
 
