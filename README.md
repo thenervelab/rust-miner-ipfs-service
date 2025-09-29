@@ -38,7 +38,7 @@ ipfs_gc_interval_secs = 3600
 
 
 [db]
-path = "./miner.db"
+path = "./miner_db_pool"
 
 
 [ipfs]
@@ -73,47 +73,137 @@ to = "alert-recipient@example.com"
 
 The service expects the miner profile referenced by the on-chain CID to be a JSON document containing an array of CIDs to pin:
 
+### Example:
 
 ```json
-{
-"version": 1,
-"pin": [
-{ "cid": "Qm...", "priority": 10 },
-{ "cid": "bafy..." }
+[
+  {
+    "account_ss58": "5CRyFwmSHJC7EeGLGbU1G8ycuoxu8sQxExhfBhkwNPtQU5n2",
+    "cid": "bafkreieo4sqlujkrkqt4bug6zvlqkoh7oi2b6iz3ewldj4iv34ruihjv7a",
+    "cid_v2": "bafkreieo4sqlujkrkqt4bug6zvlqkoh7oi2b6iz3ewldj4iv34ruihjv7a",
+    "created_at": 0,
+    "file_hash": [98,97,102,107,...],
+    "file_id": "0f8272d225e5bdb04ff4b383a5bdd0eb34ef208786755152d39ceb80787805ed",
+    "file_size_in_bytes": 16,
+    "miner_node_id": "12D3KooWBGedBmJifS4MhWFmtKkR3xjHkYTGnw6Qw8fKtgFaY3Dp",
+    "original_name": "target/release/.fingerprint/crc-catalog-e73f70b140dd4938/lib-crc_catalog",
+    "owner": "5CRyFwmSHJC7EeGLGbU1G8ycuoxu8sQxExhfBhkwNPtQU5n2",
+    "selected_validator": "5G1Qj93Fy22grpiGKq6BEvqqmS2HVRs3jaEdMhq9absQzs6g",
+    "size_bytes": 16
+  },
+  {
+    "account_ss58": "5HoreGVb17XhY3wanDvzoAWS7yHYbc5uMteXqRNTiZ6Txkqq",
+    "cid": "Qmbbh7CtJtfRP7JWXNPj2kHAnjCEhkCYvhqS46zbJFaS7z",
+    "cid_v2": "Qmbbh7CtJtfRP7JWXNPj2kHAnjCEhkCYvhqS46zbJFaS7z",
+    "created_at": 0,
+    "file_hash": [81,109,98,98,...],
+    "file_id": "81ebf3f86cbaee1757ac7be997235b75a69e1f4184989386e5fca6a28faf7816",
+    "file_size_in_bytes": 31564,
+    "miner_node_id": "12D3KooWBGedBmJifS4MhWFmtKkR3xjHkYTGnw6Qw8fKtgFaY3Dp",
+    "original_name": "tmpckosueh5",
+    "owner": "5HoreGVb17XhY3wanDvzoAWS7yHYbc5uMteXqRNTiZ6Txkqq",
+    "selected_validator": "5G1Qj93Fy22grpiGKq6BEvqqmS2HVRs3jaEdMhq9absQzs6g",
+    "size_bytes": 31564
+  }
 ]
-}
 ```
-
 
 Only the `cid` field is required. Extra fields are ignored but logged.
 
 
 ---
 
+## Running as a Systemd Service on Linux
 
-## Systemd unit (example)
+To run the service continuously in the background and start automatically on boot, you can install it as a **systemd service**.
+
+### 1. Install the binary
+Build your release binary and move it into a permanent location (e.g., `/opt/miner-ipfs-service`):
+
+bash
+´´´
+# Build release binary (or download release)
+cargo build --release
+
+# Create install directory
+sudo mkdir -p /opt/miner-ipfs-service
+
+# Copy binary and sample config
+```
+sudo cp ./target/release/miner-ipfs-service /opt/miner-ipfs-service/
+sudo cp ./config.sample.toml /opt/miner-ipfs-service/config.toml
 
 
-```ini
+# Make sure it’s executable
+sudo chmod +x /opt/miner-ipfs-service/miner-ipfs-service
+```
+
+### 2. Create a dedicated user
+
+It’s good practice to run services under a non-root user:
+
+```
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin --user-group miner
+sudo chown -R miner:miner /opt/miner-ipfs-service
+```
+
+### 3. Configure the service
+
+Edit the config file (/opt/miner-ipfs-service/config.toml) with your desired settings.
+Most importantly api_url (for kubo api, making sure that ipfs kubo api is available), ws_url (for blockchain rpc node), miner_profile_id.
+Optionally gmail and telegram credentials for notifications.
+
+### 4. Create a systemd unit file
+
+Create /etc/systemd/system/miner-ipfs-service.service:
+```
 [Unit]
 Description=Rust Miner IPFS Service
 After=network-online.target ipfs.service
 Wants=network-online.target
 
-
 [Service]
 User=miner
 Group=miner
 WorkingDirectory=/opt/miner-ipfs-service
-ExecStart=/opt/miner-ipfs-service/miner-ipfs-service run --config /opt/miner-ipfs-service/config.toml
+ExecStart=/opt/miner-ipfs-service/miner-ipfs-service run
 Restart=on-failure
 RestartSec=5
 Environment=RUST_LOG=info,miner_ipfs_service=debug
 
-
 [Install]
 WantedBy=multi-user.target
 ```
+### 5. Reload systemd and enable the service
+```
+sudo systemctl daemon-reload
+sudo systemctl enable miner-ipfs-service
+sudo systemctl start miner-ipfs-service
+```
 
+### 6. Check logs
+```
+# Show current status
+systemctl status miner-ipfs-service
 
----
+# Follow logs in real time
+journalctl -u miner-ipfs-service -f
+```
+
+### 7. Managing the service
+```
+#Start:
+sudo systemctl start miner-ipfs-service
+
+#Stop: 
+sudo systemctl stop miner-ipfs-service
+
+#Restart: 
+sudo systemctl restart miner-ipfs-service
+
+Enable on boot: 
+#sudo systemctl enable miner-ipfs-service
+
+Disable on boot: 
+#sudo systemctl disable miner-ipfs-service
+```

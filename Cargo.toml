@@ -27,19 +27,19 @@ chrono = { version = "0.4", features = ["serde", "clock"] }
 hex = "0.4"
 sha2 = "0.10"
 regex = "1"
-sysinfo = "0.28.0"
+sysinfo = "0.28"
 
 # API Server
-axum = "0.8.4"
+axum = "0.8"
 
 # async-std
-async-std = "1.13"
+async-std = "1"
 
 # Parity DB
 parity-db = "0.5"
 
 # Substrate client
-subxt = { version = "0.44.0", default-features = false, features = ["native", "jsonrpsee"] }
+subxt = { version = "0.44", default-features = false, features = ["native", "jsonrpsee"] }
 
 # Futures for async streams
 futures = "0.3"
@@ -68,3 +68,4 @@ tempfile = "3"
 httpmock = "0.7"
 mockall = "0.11" 
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tower = "0.5"
