@@ -269,7 +269,13 @@ impl IpfsClient for Client {
 mod tests {
     use super::*;
     use httpmock::prelude::*;
+    use serde_json::json;
     use std::sync::mpsc;
+
+    #[derive(serde::Deserialize, Debug)]
+    struct Dummy {
+        name: String,
+    }
 
     #[tokio::test]
     async fn check_health_ok() {
@@ -281,6 +287,36 @@ mod tests {
 
         let client = Client::new(server.base_url());
         assert!(client.check_health().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn cat_json_valid_and_invalid() {
+        let server = MockServer::start();
+
+        server.mock(|when, then| {
+            when.path("/api/v0/cat").query_param("arg", "cid1");
+            then.status(200).body(r#"{"name":"alice"}"#);
+        });
+
+        server.mock(|when, then| {
+            when.path("/api/v0/cat").query_param("arg", "cid2");
+            then.status(200).body("not_json");
+        });
+
+        let client = Client::new(server.base_url());
+
+        #[derive(serde::Deserialize)]
+        struct Dummy {
+            name: String,
+        }
+
+        // valid
+        let val: Dummy = client.cat_json("cid1").await.unwrap();
+        assert_eq!(val.name, "alice");
+
+        // invalid
+        let res: Result<Dummy> = client.cat_json("cid2").await;
+        assert!(res.is_err());
     }
 
     #[tokio::test]
@@ -319,10 +355,38 @@ mod tests {
         client.pin_add_with_progress("abc", tx).await.unwrap();
 
         let updates: Vec<_> = rx.try_iter().collect();
-
         assert!(matches!(updates[0], PinProgress::Blocks(10)));
         assert!(matches!(updates[1], PinProgress::Blocks(20)));
         assert!(matches!(updates[2], PinProgress::Done));
+    }
+
+    #[tokio::test]
+    async fn pin_add_with_progress_error_branch() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.path("/api/v0/pin/add");
+            then.status(200).body("this_is_not_json");
+        });
+
+        let client = Client::new(server.base_url());
+        let (tx, rx) = mpsc::channel();
+        let res = client.pin_add_with_progress("abc", tx).await;
+        assert!(res.is_err());
+
+        let got = rx.recv().unwrap();
+        assert!(matches!(got, PinProgress::Error(_)));
+    }
+
+    #[tokio::test]
+    async fn pin_rm_ok() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.path("/api/v0/pin/rm");
+            then.status(200).body("{}");
+        });
+
+        let client = Client::new(server.base_url());
+        assert!(client.pin_rm("cid").await.is_ok());
     }
 
     #[tokio::test]
@@ -336,5 +400,79 @@ mod tests {
         let client = Client::new(server.base_url());
         let res = client.pin_rm("badcid").await;
         assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn pin_verify_parses_stream() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.path("/api/v0/pin/verify");
+            then.status(200).body(
+                r#"{"Cid":"cid1","Pins":["ok"],"Ok":true}
+                   {"Cid":"cid2","Pins":["ok"],"Ok":true}"#,
+            );
+        });
+
+        let client = Client::new(server.base_url());
+        let res = client.pin_verify().await.unwrap();
+        assert_eq!(res.len(), 2);
+        assert_eq!(res[0].cid, "cid1");
+        assert_eq!(res[1].cid, "cid2");
+    }
+
+    #[tokio::test]
+    async fn pin_ls_all_handles_keys_and_pins() {
+        let server = MockServer::start();
+
+        // first call (recursive)
+        server.mock(|when, then| {
+            when.path("/api/v0/pin/ls").query_param("type", "recursive");
+            then.status(200).json_body(json!({
+                "Keys": { "cid1": {} },
+                "Pins": [{ "Cid": "cid2" }]
+            }));
+        });
+
+        // second call (direct)
+        server.mock(|when, then| {
+            when.path("/api/v0/pin/ls").query_param("type", "direct");
+            then.status(200).json_body(json!({
+                "Keys": { "cid3": {} },
+                "Pins": [{ "Cid": "cid4" }]
+            }));
+        });
+
+        let client = Client::new(server.base_url());
+        let set = client.pin_ls_all().await.unwrap();
+
+        assert!(set.contains("cid1"));
+        assert!(set.contains("cid2"));
+        assert!(set.contains("cid3"));
+        assert!(set.contains("cid4"));
+    }
+
+    #[tokio::test]
+    async fn gc_ok() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.path("/api/v0/repo/gc");
+            then.status(200).body("{}");
+        });
+
+        let client = Client::new(server.base_url());
+        assert!(client.gc().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn trait_forwarding_cat_json() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.path("/api/v0/cat");
+            then.status(200).body(r#"{"name":"bob"}"#);
+        });
+
+        let client = Client::new(server.base_url());
+        let obj: Dummy = IpfsClient::cat_json(&client, "cidx").await.unwrap();
+        assert_eq!(obj.name, "bob");
     }
 }
