@@ -4,10 +4,12 @@ on:
 
   push:
     branches: [ "main" ]
+    tags:
+      - "v*"   # trigger on tags like v1.0.0, v2.3.1 etc.
   pull_request:
     branches: [ "main" ]
-
   workflow_dispatch:
+
 
 jobs:
 
