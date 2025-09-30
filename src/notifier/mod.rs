@@ -113,116 +113,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_notify_all_success() {
-        let notified = Arc::new(Mutex::new(vec![]));
-        let n = MockNotifier {
-            name: "mock",
-            should_fail: false,
-            notified: notified.clone(),
-        };
-
-        let mut m = MultiNotifier::new();
-        m.add(Box::new(n));
-
-        m.notify_all("subj", "msg").await;
-
-        let items = notified.lock().unwrap();
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0], ("subj".to_string(), "msg".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_notify_all_error_doesnt_break() {
-        let notified = Arc::new(Mutex::new(vec![]));
-        let n1 = MockNotifier {
-            name: "ok",
-            should_fail: false,
-            notified: notified.clone(),
-        };
-        let n2 = MockNotifier {
-            name: "fail",
-            should_fail: true,
-            notified: notified.clone(),
-        };
-
-        let mut m = MultiNotifier::new();
-        m.add(Box::new(n1));
-        m.add(Box::new(n2));
-
-        m.notify_all("s", "m").await;
-
-        // one success, one fail
-        assert_eq!(notified.lock().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn test_health_check() {
-        let notified = Arc::new(Mutex::new(vec![]));
-        let n = MockNotifier {
-            name: "mock",
-            should_fail: false,
-            notified,
-        };
-        let mut m = MultiNotifier::new();
-        m.add(Box::new(n));
-
-        let statuses = m.health_check();
-        assert_eq!(statuses.len(), 1);
-        let (name, healthy) = statuses[0].as_ref().unwrap();
-        assert_eq!(*name, "mock");
-        assert!(healthy);
-    }
-
-    #[tokio::test]
-    async fn test_notify_all_empty() {
-        let m = MultiNotifier::new();
-        m.notify_all("subj", "msg").await; // should not panic
-        assert!(m.health_check().is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_notify_all_multiple_success() {
-        let notified = Arc::new(Mutex::new(vec![]));
-        let n1 = MockNotifier {
-            name: "n1",
-            should_fail: false,
-            notified: notified.clone(),
-        };
-        let n2 = MockNotifier {
-            name: "n2",
-            should_fail: false,
-            notified: notified.clone(),
-        };
-
-        let mut m = MultiNotifier::new();
-        m.add(Box::new(n1));
-        m.add(Box::new(n2));
-
-        m.notify_all("s", "m").await;
-
-        let items = notified.lock().unwrap();
-        assert_eq!(items.len(), 2);
-    }
-
-    #[test]
-    fn test_health_check_failure() {
-        let notified = Arc::new(Mutex::new(vec![]));
-        let n = MockNotifier {
-            name: "failing",
-            should_fail: true,
-            notified,
-        };
-        let mut m = MultiNotifier::new();
-        m.add(Box::new(n));
-
-        let statuses = m.health_check();
-        assert_eq!(statuses.len(), 1);
-        let (name, healthy) = statuses[0].as_ref().unwrap();
-        assert_eq!(*name, "failing");
-        assert!(!healthy);
-    }
-
     fn dummy_settings() -> crate::settings::Settings {
         crate::settings::Settings {
             service: Default::default(),
@@ -235,6 +125,91 @@ mod tests {
         }
     }
 
+    fn make_notifier(
+        name: &'static str,
+        should_fail: bool,
+        notified: &Arc<Mutex<Vec<(String, String)>>>,
+    ) -> Box<dyn Notifier> {
+        Box::new(MockNotifier {
+            name,
+            should_fail,
+            notified: notified.clone(),
+        })
+    }
+
+    fn notified_messages(notified: &Arc<Mutex<Vec<(String, String)>>>) -> Vec<(String, String)> {
+        notified.lock().unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn test_notify_all_success() {
+        let notified = Arc::new(Mutex::new(vec![]));
+        let mut m = MultiNotifier::new();
+        m.add(make_notifier("ok", false, &notified));
+
+        m.notify_all("subj", "msg").await;
+
+        let items = notified_messages(&notified);
+        assert_eq!(items, vec![("subj".into(), "msg".into())]);
+    }
+
+    #[tokio::test]
+    async fn test_notify_all_error_doesnt_break() {
+        let notified = Arc::new(Mutex::new(vec![]));
+        let mut m = MultiNotifier::new();
+        m.add(make_notifier("ok", false, &notified));
+        m.add(make_notifier("fail", true, &notified));
+
+        m.notify_all("s", "m").await;
+
+        // one success, one fail
+        assert_eq!(notified_messages(&notified).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_notify_all_empty() {
+        let m = MultiNotifier::new();
+        m.notify_all("irrelevant", "irrelevant").await; // should not panic
+        assert!(m.health_check().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_notify_all_multiple_success() {
+        let notified = Arc::new(Mutex::new(vec![]));
+        let mut m = MultiNotifier::new();
+        m.add(make_notifier("n1", false, &notified));
+        m.add(make_notifier("n2", false, &notified));
+
+        m.notify_all("s", "m").await;
+
+        assert_eq!(notified_messages(&notified).len(), 2);
+    }
+
+    #[test]
+    fn test_health_check_success() {
+        let notified = Arc::new(Mutex::new(vec![]));
+        let mut m = MultiNotifier::new();
+        m.add(make_notifier("healthy", false, &notified));
+
+        let binding = m.health_check();
+
+        let (name, healthy) = binding[0].as_ref().unwrap();
+        assert_eq!(*name, "healthy");
+        assert!(healthy);
+    }
+
+    #[test]
+    fn test_health_check_failure() {
+        let notified = Arc::new(Mutex::new(vec![]));
+        let mut m = MultiNotifier::new();
+        m.add(make_notifier("unhealthy", true, &notified));
+
+        let binding = m.health_check();
+        let (name, healthy) = binding[0].as_ref().unwrap();
+        assert_eq!(*name, "unhealthy");
+        assert!(!healthy);
+    }
+
     #[tokio::test]
     async fn test_build_notifier_from_config_empty() {
         let cfg = dummy_settings();
@@ -243,12 +218,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_build_notifier_from_config_with_telegram() {
+    async fn test_build_notifier_from_config_with_telegram_token_only() {
+        let mut cfg = dummy_settings();
+        cfg.telegram.bot_token = Some("fake-token".into());
+
+        let result = build_notifier_from_config(&cfg).await;
+        assert!(result.is_ok()); // should build MultiNotifier without panic
+        // not asserting non-empty because TelegramNotifier::new may fail
+    }
+
+    #[tokio::test]
+    async fn test_build_notifier_from_config_with_telegram_token_and_chat() {
         let mut cfg = dummy_settings();
         cfg.telegram.bot_token = Some("fake-token".into());
         cfg.telegram.chat_id = Some("fake-chat".into());
 
         let m = build_notifier_from_config(&cfg).await.unwrap();
-        assert!(!m.notifiers.is_empty()); // should include TelegramNotifier
+        assert!(!m.notifiers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_build_notifier_from_config_with_gmail() {
+        let mut cfg = dummy_settings();
+        cfg.gmail.username = Some("user".into());
+        cfg.gmail.app_password = Some("app-pass".into());
+        cfg.gmail.from = Some("from@example.com".into());
+        cfg.gmail.to = Some("to@example.com".into());
+
+        let m = build_notifier_from_config(&cfg).await.unwrap();
+        assert!(!m.notifiers.is_empty());
     }
 }
