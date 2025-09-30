@@ -1411,4 +1411,174 @@ pub mod tests {
         .await
         .unwrap();
     }
+
+    #[tokio::test]
+    async fn test_update_progress_cid_raw_branch() {
+        let tmp = TempDir::new().unwrap();
+        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap()).unwrap());
+        let notifier = Arc::new(MultiNotifier::new());
+        let notif_state = Arc::new(Mutex::new(NotifState::default()));
+        let active = Arc::new(Mutex::new(HashMap::new()));
+        let stalled = Arc::new(Mutex::new(HashSet::new()));
+        let concurrency = Arc::new(Semaphore::new(1));
+
+        let (tx, rx) = mpsc::channel::<PinProgress>();
+        tx.send(PinProgress::Raw("line".into())).unwrap();
+
+        let (cancel_tx, _cancel_rx) = oneshot::channel();
+        active.lock().await.insert(
+            "cidRaw".into(),
+            ActiveTask {
+                progress_rx: rx,
+                cancel_tx,
+                permit: None,
+            },
+        );
+
+        let res =
+            update_progress_cid(&pool, &notifier, &notif_state, active, stalled, concurrency).await;
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_spawn_pin_task_cancel_branch() {
+        let ipfs = Arc::new(DummyIpfs::default());
+        let active = Arc::new(Mutex::new(HashMap::new()));
+        let pending = Arc::new(Mutex::new(HashSet::new()));
+        let concurrency = Arc::new(Semaphore::new(1));
+
+        let cid = "cidCancel".to_string();
+        let started =
+            spawn_pin_task(ipfs, cid.clone(), &active, &pending, concurrency.clone()).await;
+        assert!(started);
+
+        // Send cancel to trigger cancel_rx branch
+        if let Some(task) = active.lock().await.remove(&cid) {
+            let _ = task.cancel_tx.send(());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_run_immediate_shutdown() {
+        let tmp = TempDir::new().unwrap();
+        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap()).unwrap());
+        let notifier = Arc::new(MultiNotifier::new());
+
+        let mut cfg = Settings::default();
+        cfg.monitoring.port = None; // no health server
+        cfg.service.poll_interval_secs = 1;
+        cfg.service.reconcile_interval_secs = 1;
+        cfg.service.ipfs_gc_interval_secs = 1;
+        cfg.service.conn_check_interval_secs = 1;
+
+        // Run in background and immediately signal shutdown
+        let h = tokio::spawn(run(cfg, pool, notifier));
+        ctrlc::set_handler(move || {}).unwrap(); // override real ctrlc
+        h.abort(); // force cancel — covers startup/shutdown select
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_once_profile_and_pin_states() {
+        let pool = Arc::new(DummyPool {
+            profile: Some("profilecid".into()), // ensures Some(cid) for profile
+            ..Default::default()
+        });
+
+        // Minimal FileInfo with dummy values to satisfy deserialization
+        let file_infos = vec![FileInfo {
+            cid: "cid123".to_string(),
+            account_ss58: Some("dummy-account".to_string()),
+            cid_v2: None,
+            created_at: None,
+            file_id: None,
+            file_size_in_bytes: None,
+            miner_node_id: None,
+            original_name: None,
+            owner: None,
+            selected_validator: None,
+            size_bytes: None,
+            file_hash: None,
+        }];
+
+        let ipfs = Arc::new(DummyIpfs {
+            cat_json_result: Ok(serde_json::to_value(file_infos).unwrap()),
+            pin_verify_result: Ok(vec![
+                PinState {
+                    cid: "cidErr".into(),
+                    ok: false,
+                    err: Some("bad".into()),
+                    pin_status: None,
+                },
+                PinState {
+                    cid: "cidOk".into(),
+                    ok: true,
+                    err: None,
+                    pin_status: None,
+                },
+            ]),
+            ..Default::default()
+        });
+
+        let notifier = Arc::new(MultiNotifier::new());
+        let notif_state = Arc::new(Mutex::new(NotifState::default()));
+        let active = Arc::new(Mutex::new(HashMap::new()));
+        let pending = Arc::new(Mutex::new(HashSet::new()));
+        let concurrency = Arc::new(Semaphore::new(1));
+
+        let res = reconcile_once(
+            &pool,
+            &ipfs,
+            &notifier,
+            &notif_state,
+            active,
+            pending,
+            concurrency,
+        )
+        .await;
+
+        assert!(
+            res.is_ok(),
+            "Expected reconcile_once to succeed, got {:?}",
+            res
+        );
+    }
+    #[tokio::test]
+    async fn test_update_profile_cid_changes() {
+        // Chain will always return Some("newcid")
+        let cid = "a".repeat(46);
+        let mut chain = Chain::dummy(true, Some(Ok(Some("0".to_string() + &cid.clone()))));
+
+        // temp DB
+        let tmp = TempDir::new().unwrap();
+        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap()).unwrap());
+
+        // config with required substrate values
+        let cfg = Settings {
+            substrate: crate::settings::SubstrateCfg {
+                pallet: Some("dummy_pallet".into()),
+                storage_item: Some("dummy_item".into()),
+                miner_profile_id: Some("miner123".into()),
+                raw_storage_key_hex: None,
+                ws_url: "wss://dummy".into(),
+            },
+            ..Default::default()
+        };
+
+        let fetched = chain
+            .fetch_profile_cid(
+                cfg.substrate.raw_storage_key_hex.as_deref(),
+                cfg.substrate.pallet.as_deref(),
+                cfg.substrate.storage_item.as_deref(),
+                cfg.substrate.miner_profile_id.as_deref(),
+            )
+            .await;
+
+        // run update
+        let res = update_profile_cid(&cfg, &pool, &mut chain).await;
+        dbg!(&res);
+        assert!(res.is_ok());
+        let stored = pool.get_profile().unwrap();
+
+        assert_eq!(stored, Some(cid));
+    }
 }
