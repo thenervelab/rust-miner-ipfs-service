@@ -176,4 +176,84 @@ mod tests {
         assert_eq!(name, "telegram");
         assert!(healthy);
     }
+
+    #[tokio::test]
+    async fn test_new_fetches_chat_id_no_messages() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/botTOKEN/getUpdates");
+            then.status(200).json_body(serde_json::json!({
+                "ok": true,
+                "result": [] // no messages at all
+            }));
+        });
+
+        let res =
+            TelegramNotifier::with_base_url("TOKEN".to_string(), None, server.base_url()).await;
+        assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_new_fetches_chat_id_invalid_updates() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/botTOKEN/getUpdates");
+            then.status(200).json_body(serde_json::json!({
+                "ok": true,
+                "result": [{ "not_a_message": 123 }]
+            }));
+        });
+
+        let res =
+            TelegramNotifier::with_base_url("TOKEN".to_string(), None, server.base_url()).await;
+        assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_new_fetches_chat_id_http_error() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/botTOKEN/getUpdates");
+            then.status(500);
+        });
+
+        let res =
+            TelegramNotifier::with_base_url("TOKEN".to_string(), None, server.base_url()).await;
+        assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_notify_http_error() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(POST).path("/botTOKEN/sendMessage");
+            then.status(500);
+        });
+
+        let n = TelegramNotifier {
+            bot_token: "TOKEN".to_string(),
+            chat_id: "42".to_string(),
+            client: Client::new(),
+            base_url: server.base_url(),
+        };
+
+        let res = n.notify("subject", "body").await;
+        assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_new_fetches_chat_id_message_none() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/botTOKEN/getUpdates");
+            then.status(200).json_body(serde_json::json!({
+                "ok": true,
+                "result": [{ "message": null }]
+            }));
+        });
+
+        let res =
+            TelegramNotifier::with_base_url("TOKEN".to_string(), None, server.base_url()).await;
+        assert!(res.is_err());
+    }
 }

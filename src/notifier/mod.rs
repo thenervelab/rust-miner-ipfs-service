@@ -173,4 +173,82 @@ mod tests {
         assert_eq!(*name, "mock");
         assert!(healthy);
     }
+
+    #[tokio::test]
+    async fn test_notify_all_empty() {
+        let m = MultiNotifier::new();
+        m.notify_all("subj", "msg").await; // should not panic
+        assert!(m.health_check().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_notify_all_multiple_success() {
+        let notified = Arc::new(Mutex::new(vec![]));
+        let n1 = MockNotifier {
+            name: "n1",
+            should_fail: false,
+            notified: notified.clone(),
+        };
+        let n2 = MockNotifier {
+            name: "n2",
+            should_fail: false,
+            notified: notified.clone(),
+        };
+
+        let mut m = MultiNotifier::new();
+        m.add(Box::new(n1));
+        m.add(Box::new(n2));
+
+        m.notify_all("s", "m").await;
+
+        let items = notified.lock().unwrap();
+        assert_eq!(items.len(), 2);
+    }
+
+    #[test]
+    fn test_health_check_failure() {
+        let notified = Arc::new(Mutex::new(vec![]));
+        let n = MockNotifier {
+            name: "failing",
+            should_fail: true,
+            notified,
+        };
+        let mut m = MultiNotifier::new();
+        m.add(Box::new(n));
+
+        let statuses = m.health_check();
+        assert_eq!(statuses.len(), 1);
+        let (name, healthy) = statuses[0].as_ref().unwrap();
+        assert_eq!(*name, "failing");
+        assert!(!healthy);
+    }
+
+    fn dummy_settings() -> crate::settings::Settings {
+        crate::settings::Settings {
+            service: Default::default(),
+            db: Default::default(),
+            ipfs: Default::default(),
+            substrate: Default::default(),
+            telegram: Default::default(),
+            gmail: Default::default(),
+            monitoring: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_build_notifier_from_config_empty() {
+        let cfg = dummy_settings();
+        let m = build_notifier_from_config(&cfg).await.unwrap();
+        assert!(m.notifiers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_build_notifier_from_config_with_telegram() {
+        let mut cfg = dummy_settings();
+        cfg.telegram.bot_token = Some("fake-token".into());
+        cfg.telegram.chat_id = Some("fake-chat".into());
+
+        let m = build_notifier_from_config(&cfg).await.unwrap();
+        assert!(!m.notifiers.is_empty()); // should include TelegramNotifier
+    }
 }
