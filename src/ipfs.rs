@@ -99,10 +99,9 @@ impl Client {
                                     let _ = tx.send(PinProgress::Blocks(progress));
                                 } else if let Some(pins) =
                                     json.get("Pins").and_then(|v| v.as_array())
+                                    && !pins.is_empty()
                                 {
-                                    if !pins.is_empty() {
-                                        let _ = tx.send(PinProgress::Done);
-                                    }
+                                    let _ = tx.send(PinProgress::Done);
                                 }
                             }
                             Err(e) if e.is_eof() => {

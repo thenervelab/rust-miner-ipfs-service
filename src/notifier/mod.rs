@@ -45,15 +45,13 @@ pub async fn build_notifier_from_config(cfg: &crate::settings::Settings) -> Resu
     if let (Some(bot), Some(chat)) = (cfg.telegram.bot_token.clone(), cfg.telegram.chat_id.clone())
     {
         let t = telegram::TelegramNotifier::new(bot, Some(chat)).await;
-        match t {
-            Ok(t) => m.add(Box::new(t)),
-            _ => {}
+        if let Ok(t) = t {
+            m.add(Box::new(t))
         }
     } else if let Some(bot) = cfg.telegram.bot_token.clone() {
         let t = telegram::TelegramNotifier::new(bot, None).await;
-        match t {
-            Ok(t) => m.add(Box::new(t)),
-            _ => {}
+        if let Ok(t) = t {
+            m.add(Box::new(t))
         }
     }
     if let (Some(user), Some(app_pass), Some(from), Some(to)) = (

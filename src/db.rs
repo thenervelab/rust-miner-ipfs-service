@@ -165,7 +165,7 @@ impl CidPool {
 
         for cid in to_add {
             let rec = PinRecord {
-                last_progress: 0 as u64,
+                last_progress: 0_u64,
                 last_progress_at: chrono::Utc::now().timestamp() as u64,
                 total_blocks: 0,
                 sync_complete: false,

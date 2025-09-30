@@ -125,22 +125,37 @@ where
     })
 }
 
+/// Configuration for the health server
+pub struct HealthServerConfig<C> {
+    pub ipfs: Arc<C>,
+    pub chain: Chain,
+    pub notifier: Arc<MultiNotifier>,
+    pub addr: SocketAddr,
+    pub shutdown: Arc<Notify>,
+    pub substrate_pallet: Option<String>,
+    pub storage_item: Option<String>,
+    pub miner_account_hex: Option<String>,
+    pub raw_storage_key_hex: Option<String>,
+}
+
 /// HTTP server that just wraps the handler
-pub async fn run_health_server<C>(
-    ipfs: Arc<C>,
-    chain: Chain,
-    notifier: Arc<MultiNotifier>,
-    bind_addr: &str,
-    shutdown: Arc<Notify>,
-    substrate_pallet: Option<String>,
-    storage_item: Option<String>,
-    miner_account_hex: Option<String>,
-    raw_storage_key_hex: Option<String>,
-) -> Result<()>
+pub async fn run_health_server<C>(cfg: HealthServerConfig<C>) -> Result<()>
 where
     C: IpfsClient + 'static,
 {
-    tracing::info!("Starting monitoring server on {}", bind_addr);
+    tracing::info!("Starting monitoring server on {}", cfg.addr);
+
+    let HealthServerConfig {
+        ipfs,
+        chain,
+        notifier,
+        addr,
+        shutdown,
+        substrate_pallet,
+        storage_item,
+        miner_account_hex,
+        raw_storage_key_hex,
+    } = cfg;
 
     let app = Router::new().route(
         "/status",
@@ -172,7 +187,6 @@ where
         }),
     );
 
-    let addr: SocketAddr = bind_addr.parse()?;
     let listener = TcpListener::bind(addr).await?;
 
     axum::serve(listener, app)
@@ -183,16 +197,6 @@ where
 
     Ok(())
 }
-
-//          //          //          //          //          //          //          //          //          //          //          //
-
-//                      //                      //                      //                                  //                      //
-
-//                      //                      //          //          //          //                      //                      //
-
-//                      //                      //                                  //                      //                      //
-
-//                      //                      //          //          //          //                      //                      //
 
 #[cfg(test)]
 mod tests {
@@ -214,7 +218,6 @@ mod tests {
 
     #[tokio::test]
     async fn status_ipfs_down() {
-        // Simulate IPFS failing health check
         let mut bad_ipfs = DummyIpfs::default();
         bad_ipfs.health_ok = false;
         let ipfs = Arc::new(bad_ipfs);
@@ -232,7 +235,7 @@ mod tests {
     async fn status_blockchain_down() {
         let ipfs = Arc::new(DummyIpfs::default());
         let notifier = Arc::new(MultiNotifier::new());
-        let mut chain = Chain::dummy(false, Some(Ok(Some("profile".into())))); // blocks_at_latest fails
+        let mut chain = Chain::dummy(false, Some(Ok(Some("profile".into()))));
 
         let response = status_handler(&ipfs, &mut chain, &notifier, None, None, None, None).await;
         let body = serde_json::to_string(&response.0).unwrap();
@@ -274,7 +277,6 @@ mod tests {
     async fn status_profile_not_found() {
         let ipfs = Arc::new(DummyIpfs::default());
         let notifier = Arc::new(MultiNotifier::new());
-        // Chain returns Ok(None) → should map to "Error: profile not found"
         let mut chain = Chain::dummy(true, Some(Ok(None)));
 
         let response = status_handler(
@@ -289,7 +291,6 @@ mod tests {
         .await;
         let body = serde_json::to_string(&response.0).unwrap();
 
-        // Deserialize into struct
         let status: HealthStatus = serde_json::from_str(&body).unwrap();
         assert_eq!(status.profile, "Error: profile not found");
     }
@@ -298,7 +299,6 @@ mod tests {
     async fn status_profile_error() {
         let ipfs = Arc::new(DummyIpfs::default());
         let notifier = Arc::new(MultiNotifier::new());
-        // Chain returns Err → should map to "Error: profile error"
         let mut chain = Chain::dummy(true, Some(Err(anyhow::anyhow!("profile error"))));
 
         let response = status_handler(
@@ -313,7 +313,6 @@ mod tests {
         .await;
         let body = serde_json::to_string(&response.0).unwrap();
 
-        // Deserialize into struct
         let status: HealthStatus = serde_json::from_str(&body).unwrap();
         assert!(status.profile.contains("profile error"));
     }
@@ -327,7 +326,6 @@ mod tests {
         let response = status_handler(&ipfs, &mut chain, &notifier, None, None, None, None).await;
         let body = serde_json::to_string(&response.0).unwrap();
 
-        // Explicitly assert the OK disk branch
         assert!(body.contains("\"disk\":\"OK\""));
         assert!(body.contains("\"disk_info\":["));
     }
@@ -342,8 +340,7 @@ mod tests {
         let chain = Chain::dummy(true, Some(Ok(Some("profile".into()))));
         let shutdown = Arc::new(Notify::new());
 
-        // Bind to ephemeral port
-        let addr = "127.0.0.1:0";
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let shutdown_clone = shutdown.clone();
@@ -371,7 +368,6 @@ mod tests {
             .unwrap();
         });
 
-        // Give server time to start
         sleep(Duration::from_millis(100)).await;
 
         let client = Client::new();
@@ -384,7 +380,6 @@ mod tests {
 
         assert!(text.contains("\"ipfs\""));
 
-        // trigger shutdown
         shutdown.notify_one();
     }
 }

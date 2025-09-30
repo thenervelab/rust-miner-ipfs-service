@@ -106,7 +106,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
         .expect("ctrlc");
     }
 
-    let mut notif_state = Arc::new(Mutex::new(NotifState::default()));
+    let notif_state = Arc::new(Mutex::new(NotifState::default()));
 
     tracing::info!("Connecting to IPFS node");
 
@@ -129,7 +129,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
             return Ok(())
         }
         _ = async {
-            while !chain_uninited.is_some() {
+            while chain_uninited.is_none() {
                 match Chain::connect(&cfg.substrate.ws_url).await {
                     Ok(c) => {
                         tracing::info!("Connected to Substrate node");
@@ -178,19 +178,19 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
         let raw_storage_key_hex = cfg.substrate.raw_storage_key_hex.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = crate::monitoring::run_health_server(
-                ipfs_clone,
-                chain_clone,
-                notifier_arc,
-                &addr,
-                shutdown_clone,
-                pallet,
+            let cfg = crate::monitoring::HealthServerConfig {
+                ipfs: ipfs_clone,
+                chain: chain_clone,
+                notifier: notifier_arc,
+                addr: addr.parse().expect("invalid bind addr"),
+                shutdown: shutdown_clone,
+                substrate_pallet: pallet,
                 storage_item,
-                miner_profile_id,
+                miner_account_hex: miner_profile_id,
                 raw_storage_key_hex,
-            )
-            .await
-            {
+            };
+
+            if let Err(e) = crate::monitoring::run_health_server(cfg).await {
                 tracing::error!("Monitoring server failed: {:?}", e);
             }
         });
@@ -330,7 +330,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                         break;
                     }
                     _ = async {
-                        if let Err(e) = reconcile_once(&pool, &ipfs, &notifier, &mut notif_state,
+                        if let Err(e) = reconcile_once(&pool, &ipfs, &notifier, &notif_state,
                                 active_pins.clone(),
                                 pending_pins.clone(),
                                 concurrency.clone(),
@@ -353,7 +353,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                             ).await;
                         }
 
-                        if let Err(e) = update_progress_cid(&pool, &notifier, &mut notif_state, active_pins.clone(),  stalled_pins.clone(), concurrency.clone()).await {
+                        if let Err(e) = update_progress_cid(&pool, &notifier, &notif_state, active_pins.clone(),  stalled_pins.clone(), concurrency.clone()).await {
                             tracing::error!(error=?e, "progress update error");
                         }
                    } => {}
@@ -445,7 +445,7 @@ where
     let profile: Vec<FileInfo> = ipfs
         .cat_json::<Vec<FileInfo>>(&profile_cid)
         .await
-        .context("fetch_profile")?;
+        .context("Failed to get miner profile json from IPFS")?;
 
     tracing::info!(pins = profile.len(), "profile_loaded");
 
@@ -481,7 +481,7 @@ where
                         format!("Pinning task {}", cid),
                         true,
                         &format!("Task {} started", cid),
-                        &format!("unused"),
+                        "unused",
                     )
                     .await;
             });
@@ -498,7 +498,11 @@ where
         let active_pins_map = active_pins.clone();
         tokio::spawn(async move {
             let res: Result<()> = async {
-                let _pin_attempt = match ipfs.pin_rm(&cid).await.context("pin_rm") {
+                match ipfs
+                    .pin_rm(&cid)
+                    .await
+                    .context(format!("Failed to remove pin {}", cid))
+                {
                     Ok(()) => {}
                     Err(_e) => {
                         let pin_set = ipfs.pin_ls_all().await?;
@@ -544,45 +548,42 @@ where
     }
     .await;
 
-    match pin_state_errors {
-        Ok(list) => {
-            for p in list {
-                let e = match &p.err {
-                    Some(e) => {
-                        tracing::error!("Problem with pinned CID: {}, Error: {}", p.cid, e);
-                        e
-                    }
-                    _ => &"unknown".to_string(),
-                };
+    if let Ok(list) = pin_state_errors {
+        for p in list {
+            let e = match &p.err {
+                Some(e) => {
+                    tracing::error!("Problem with pinned CID: {}, Error: {}", p.cid, e);
+                    e
+                }
+                _ => &"unknown".to_string(),
+            };
 
-                let cidm = format!("pinned_cid_err_{}", p.cid);
-                let okm = format!("Problem with pinned CID: {} error: {}", p.cid, e);
-                let errm = format!("Pinned CID OK: {}", p.cid);
+            let cidm = format!("pinned_cid_err_{}", p.cid);
+            let okm = format!("Problem with pinned CID: {} error: {}", p.cid, e);
+            let errm = format!("Pinned CID OK: {}", p.cid);
 
-                if p.err.is_some() {
-                    notif_state
-                        .lock()
-                        .await
-                        .notify_change(&notifier, cidm, false, &okm, &errm)
-                        .await;
-                } else {
-                    notif_state
-                        .lock()
-                        .await
-                        .notify_change(&notifier, cidm, true, &okm, &errm)
-                        .await;
-                };
-            }
+            if p.err.is_some() {
+                notif_state
+                    .lock()
+                    .await
+                    .notify_change(notifier, cidm, false, &okm, &errm)
+                    .await;
+            } else {
+                notif_state
+                    .lock()
+                    .await
+                    .notify_change(notifier, cidm, true, &okm, &errm)
+                    .await;
+            };
         }
-        _ => {}
     };
 
     let (disks, _program_location_disk_usage) = disk_usage();
 
-    for i in 0..disks.len() {
-        let available = disks[i].0 as f64 / disks[i].1 as f64 * 100.0;
+    for (i, disk) in disks.iter().enumerate() {
+        let available = disk.0 as f64 / disk.1 as f64 * 100.0;
 
-        let gb: f64 = disks[i].1 as f64 / (1024.0 * 1024.0 * 1024.0);
+        let gb: f64 = disk.1 as f64 / (1024.0 * 1024.0 * 1024.0);
 
         let diskm = format!("disk_space_disk_{}", i);
         let okm = format!(
@@ -600,14 +601,14 @@ where
             notif_state
                 .lock()
                 .await
-                .notify_change(&notifier, diskm, false, &okm, &errm)
+                .notify_change(notifier, diskm, false, &okm, &errm)
                 .await;
         } else {
             tracing::info!("Disk {} available space: {}%", i, available);
             notif_state
                 .lock()
                 .await
-                .notify_change(&notifier, diskm, true, &okm, &errm)
+                .notify_change(notifier, diskm, true, &okm, &errm)
                 .await;
         };
     }
@@ -639,7 +640,7 @@ async fn spawn_pin_task<C: IpfsClient + 'static>(
             cid.clone(),
             ActiveTask {
                 progress_rx: rx,
-                cancel_tx: cancel_tx,
+                cancel_tx,
                 permit: Some(permit),
             },
         );
@@ -678,7 +679,7 @@ async fn spawn_pin_task<C: IpfsClient + 'static>(
         }
     }
 
-    return false;
+    false
 }
 
 pub async fn update_progress_cid(
@@ -734,7 +735,7 @@ pub async fn update_progress_cid(
                 }
                 PinProgress::Error(ref e) => {
                     tracing::error!("CID {} pin error: {}", &cid[0..16], e);
-                    let _ = pool.record_failure(Some(&cid), "pin", &format!("{:?}", e));
+                    let _ = pool.record_failure(Some(cid), "pin", &format!("{:?}", e));
                     errored.push(cid.clone());
                     let notifier = notifier.clone();
                     let cid = cid.clone();

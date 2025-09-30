@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Run => service::run(cfg, pool, notifier).await?,
         Commands::Reconcile => {
-            let mut notif_state = Arc::new(Mutex::new(NotifState::default()));
+            let notif_state = Arc::new(Mutex::new(NotifState::default()));
             let active_pins: Arc<Mutex<HashMap<String, ActiveTask>>> =
                 Arc::new(Mutex::new(HashMap::new()));
             let pending_pins: PinSet = Arc::new(Mutex::new(HashSet::new()));
@@ -78,7 +78,7 @@ async fn main() -> Result<()> {
                 &pool,
                 &ipfs,
                 &notifier,
-                &mut notif_state,
+                &notif_state,
                 active_pins.clone(),
                 pending_pins.clone(),
                 concurrency.clone(),
