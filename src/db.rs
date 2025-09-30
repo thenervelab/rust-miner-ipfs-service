@@ -468,4 +468,114 @@ mod tests {
         let entry = iter.next().unwrap();
         assert!(entry.is_some());
     }
+
+    #[test]
+    fn set_and_get_profile_roundtrip() {
+        let (pool, _tmpdir) = new_pool();
+
+        pool.set_profile(Some("profile_cid")).unwrap();
+        assert_eq!(pool.get_profile().unwrap(), Some("profile_cid".to_string()));
+
+        pool.set_profile(None).unwrap();
+        assert_eq!(pool.get_profile().unwrap(), None);
+    }
+
+    #[test]
+    fn update_progress_variants() {
+        let (pool, _tmpdir) = new_pool();
+
+        // Start with a pin
+        let rec = PinRecord {
+            last_progress: 0,
+            last_progress_at: 0,
+            total_blocks: 0,
+            sync_complete: false,
+        };
+        pool.put_pin("cidU", &rec).unwrap();
+
+        let mut updates = HashMap::new();
+        updates.insert("cidU".to_string(), PinProgress::Blocks(10));
+        let stale = pool.update_progress(&updates).unwrap();
+        assert!(stale.is_empty());
+        assert_eq!(pool.get_pin("cidU").unwrap().unwrap().last_progress, 10);
+
+        updates.insert("cidU".to_string(), PinProgress::Done);
+        pool.update_progress(&updates).unwrap();
+        assert!(pool.get_pin("cidU").unwrap().unwrap().sync_complete);
+
+        updates.insert("cidU".to_string(), PinProgress::Error("oops".into()));
+        pool.update_progress(&updates).unwrap();
+
+        updates.insert("cidU".to_string(), PinProgress::Raw("ignored".into()));
+        pool.update_progress(&updates).unwrap();
+    }
+
+    #[test]
+    fn touch_all_progress_updates_all() {
+        let (pool, _tmpdir) = new_pool();
+
+        pool.put_pin(
+            "cid1",
+            &PinRecord {
+                last_progress: 0,
+                last_progress_at: 0,
+                total_blocks: 0,
+                sync_complete: false,
+            },
+        )
+        .unwrap();
+
+        pool.put_pin(
+            "cid2",
+            &PinRecord {
+                last_progress: 0,
+                last_progress_at: 0,
+                total_blocks: 0,
+                sync_complete: false,
+            },
+        )
+        .unwrap();
+
+        pool.touch_all_progress().unwrap();
+
+        let r1 = pool.get_pin("cid1").unwrap().unwrap();
+        let r2 = pool.get_pin("cid2").unwrap().unwrap();
+        assert!(r1.last_progress_at > 0);
+        assert!(r2.last_progress_at > 0);
+    }
+
+    #[test]
+    fn record_failure_with_none_cid() {
+        let (pool, _tmpdir) = new_pool();
+        pool.record_failure(None, "action", "err").unwrap();
+
+        let mut iter = pool.db.iter(2).unwrap();
+        let (key, _val) = iter.next().unwrap().unwrap();
+        assert!(String::from_utf8(key).unwrap().starts_with("failure-"));
+    }
+
+    #[test]
+    fn get_pin_nonexistent_returns_none() {
+        let (pool, _tmpdir) = new_pool();
+        assert!(pool.get_pin("nope").unwrap().is_none());
+    }
+
+    #[test]
+    fn show_state_runs_without_panic() {
+        let (pool, _tmpdir) = new_pool();
+        pool.set_profile(Some("prof")).unwrap();
+        pool.put_pin(
+            "cidS",
+            &PinRecord {
+                last_progress: 1,
+                last_progress_at: 2,
+                total_blocks: 3,
+                sync_complete: false,
+            },
+        )
+        .unwrap();
+
+        // Just check it doesn't panic
+        pool.show_state().unwrap();
+    }
 }
