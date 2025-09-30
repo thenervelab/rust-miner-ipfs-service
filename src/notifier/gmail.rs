@@ -94,4 +94,71 @@ mod tests {
         assert_eq!(name, "gmail");
         assert!(healthy);
     }
+
+    #[tokio::test]
+    async fn test_new_constructor_parses_and_builds() {
+        let notifier = GmailNotifier::new(
+            "user@example.com",
+            "apppass",
+            "from@example.com",
+            "to@example.com",
+        );
+        assert!(notifier.is_ok());
+
+        let n = notifier.unwrap();
+        assert_eq!(n.from.email, "from@example.com".parse().unwrap());
+        assert_eq!(n.to.email, "to@example.com".parse().unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_new_invalid_from_address_fails() {
+        let result = GmailNotifier::new(
+            "user@example.com",
+            "apppass",
+            "not-an-email", // invalid from
+            "to@example.com",
+        );
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_new_invalid_to_address_fails() {
+        let result = GmailNotifier::new(
+            "user@example.com",
+            "apppass",
+            "from@example.com",
+            "not-an-email", // invalid to
+        );
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_notify_error_contains_context() {
+        let g = GmailNotifier {
+            from: "from@example.com".parse().unwrap(),
+            to: "to@example.com".parse().unwrap(),
+            mailer: lettre::transport::stub::AsyncStubTransport::new_error(),
+        };
+
+        let err = g.notify("x", "y").await.unwrap_err();
+        let msg = format!("{:?}", err);
+        assert!(msg.contains("send email"));
+    }
+
+    #[tokio::test]
+    async fn test_new_with_display_name() {
+        let from = "\"Sender Name\" <from@example.com>"
+            .parse::<Mailbox>()
+            .unwrap();
+        let to = "\"Receiver\" <to@example.com>".parse::<Mailbox>().unwrap();
+
+        let g = GmailNotifier {
+            from,
+            to,
+            mailer: AsyncStubTransport::new_ok(),
+        };
+
+        let result = g.notify("hello", "world").await;
+        assert!(result.is_ok());
+    }
 }

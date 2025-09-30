@@ -1564,7 +1564,7 @@ pub mod tests {
             ..Default::default()
         };
 
-        let fetched = chain
+        let _fetched = chain
             .fetch_profile_cid(
                 cfg.substrate.raw_storage_key_hex.as_deref(),
                 cfg.substrate.pallet.as_deref(),
