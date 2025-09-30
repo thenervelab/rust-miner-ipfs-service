@@ -197,7 +197,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::service::tests::DummyIpfs;
+    use crate::test_utils::DummyIpfs;
 
     #[tokio::test]
     async fn status_ok_with_dummy() {
@@ -214,8 +214,6 @@ mod tests {
 
     #[tokio::test]
     async fn status_ipfs_down() {
-        use crate::service::tests::DummyIpfs;
-
         // Simulate IPFS failing health check
         let mut bad_ipfs = DummyIpfs::default();
         bad_ipfs.health_ok = false;

@@ -7,6 +7,7 @@ mod notifier;
 mod service;
 mod settings;
 mod substrate;
+pub mod test_utils;
 
 use crate::{
     db::CidPool,
