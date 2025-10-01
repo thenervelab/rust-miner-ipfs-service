@@ -13,6 +13,31 @@ on:
 
 jobs:
 
+  version-bump:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install cargo-edit
+        run: cargo install cargo-edit
+
+      - name: Update Cargo.toml version from tag
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "Setting Cargo.toml version to $VERSION"
+          cargo set-version $VERSION
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git commit -am "chore: bump version to $VERSION"
+          git push origin HEAD:main
+
+
+
   build:
     strategy:
       matrix:
@@ -24,25 +49,6 @@ jobs:
         with:
           fetch-depth: 0
           submodules: 'true'
-
-      - name: Install cargo-edit
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: cargo install cargo-edit
-
-      - name: Update Cargo.toml version from tag
-        if: startsWith(github.ref, 'refs/tags/v') && matrix.os == 'ubuntu-latest'
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          echo "Setting Cargo.toml version to $VERSION"
-          cargo set-version $VERSION
-
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-
-          if [ -n "$(git status --porcelain)" ]; then
-            git commit -am "chore: bump version to $VERSION"
-            git push origin HEAD:main
-          fi
 
       - name: Cache cargo
         uses: actions/cache@v4
