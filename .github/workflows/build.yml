@@ -39,6 +39,7 @@ jobs:
 
 
   build:
+    needs: version-bump
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
