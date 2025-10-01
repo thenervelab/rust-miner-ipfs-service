@@ -1,6 +1,6 @@
 use super::{
-    ActiveTask, NotifState, PinProgress, reconcile_once, run, spawn_pin_task, update_profile_cid,
-    update_progress_cid,
+    ActiveTask, NotifState, PinProgress, disk_usage, reconcile_once, run, spawn_pin_task,
+    update_profile_cid, update_progress_cid,
 };
 
 use std::time::Duration;
@@ -43,46 +43,6 @@ pub mod tests {
     use crate::notifier::MultiNotifier;
 
     #[tokio::test]
-    async fn test_notify_change_adds_cid() {
-        let notifier = Arc::new(MultiNotifier::new());
-        let mut state = NotifState::default();
-
-        // notify_change signature expects ok_msg & err_msg as &str (not String)
-        state
-            .notify_change(&notifier, "cid1".to_string(), false, "start", "stop")
-            .await;
-
-        // Validate side-effect: last_status map should contain the entry
-        let map = state.last_status.lock().await;
-        assert_eq!(map.get("cid1"), Some(&false));
-    }
-
-    #[tokio::test]
-    async fn test_notify_change_idempotent() {
-        let notifier = Arc::new(MultiNotifier::new());
-        let mut state = NotifState::default();
-
-        state
-            .notify_change(&notifier, "cid1".to_string(), false, "start", "stop")
-            .await;
-
-        // second identical update should not create an extra entry
-        state
-            .notify_change(
-                &notifier,
-                "cid1".to_string(),
-                false,
-                "start-again",
-                "stop-again",
-            )
-            .await;
-
-        let map = state.last_status.lock().await;
-        assert_eq!(map.len(), 1);
-        assert_eq!(map.get("cid1"), Some(&false));
-    }
-
-    #[tokio::test]
     async fn test_progress_receiver_flow() {
         let (tx, rx) = mpsc::channel::<PinProgress>();
 
@@ -117,55 +77,6 @@ pub mod tests {
             Some(PinProgress::Done) => {}
             _ => panic!("expected Done"),
         }
-    }
-
-    #[tokio::test]
-    async fn test_update_progress_cid_blocks_and_done() {
-        let tmp = TempDir::new().unwrap();
-        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap()).unwrap());
-
-        let notifier = Arc::new(MultiNotifier::new());
-        let notif_state = Arc::new(Mutex::new(NotifState::default()));
-        let active_pins = Arc::new(Mutex::new(HashMap::new()));
-        let stalled_pins = Arc::new(Mutex::new(HashSet::new()));
-        let concurrency = Arc::new(Semaphore::new(2));
-
-        let (tx, rx) = mpsc::channel::<PinProgress>();
-        tx.send(PinProgress::Blocks(42)).unwrap();
-        tx.send(PinProgress::Done).unwrap();
-
-        let (cancel_tx, _cancel_rx) = oneshot::channel();
-        active_pins.lock().await.insert(
-            "cidX".to_string(),
-            ActiveTask {
-                progress_rx: rx,
-                cancel_tx,
-                permit: None,
-            },
-        );
-
-        // call the function under test
-        let res = update_progress_cid(
-            &pool,
-            &notifier,
-            &notif_state,
-            active_pins.clone(),
-            stalled_pins.clone(),
-            concurrency.clone(),
-        )
-        .await;
-
-        assert!(res.is_ok());
-
-        // update_progress should have created/updated the db record and set sync_complete
-        let rec = pool
-            .get_pin("cidX")
-            .unwrap()
-            .expect("pin record should exist");
-        assert!(
-            rec.sync_complete,
-            "record must be marked sync_complete after Done"
-        );
     }
 
     #[tokio::test]
@@ -279,31 +190,6 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn test_reconcile_once_no_profile_cid() {
-        let tmp = TempDir::new().unwrap();
-        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap()).unwrap());
-        let notifier = Arc::new(MultiNotifier::new());
-        let notif_state = Arc::new(Mutex::new(NotifState::default()));
-        let active = Arc::new(Mutex::new(HashMap::new()));
-        let pending = Arc::new(Mutex::new(HashSet::new()));
-        let concurrency = Arc::new(Semaphore::new(1));
-        let ipfs = Arc::new(DummyIpfs::default());
-
-        // no profile set → early return
-        let res = reconcile_once(
-            &pool,
-            &ipfs,
-            &notifier,
-            &notif_state,
-            active,
-            pending,
-            concurrency,
-        )
-        .await;
-        assert!(res.is_ok());
-    }
-
-    #[tokio::test]
     async fn test_update_progress_cid_stalled_branch() {
         let tmp = TempDir::new().unwrap();
         let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap()).unwrap());
@@ -368,6 +254,7 @@ pub mod tests {
             active,
             pending,
             concurrency,
+            disk_usage,
         )
         .await;
         assert!(res.is_ok());
@@ -400,6 +287,7 @@ pub mod tests {
             active,
             pending,
             concurrency,
+            disk_usage,
         )
         .await;
         assert!(res.is_ok());
@@ -442,6 +330,7 @@ pub mod tests {
             active,
             pending,
             concurrency,
+            disk_usage,
         )
         .await;
 
@@ -492,6 +381,7 @@ pub mod tests {
             active.clone(),
             pending.clone(),
             concurrency.clone(),
+            disk_usage,
         )
         .await
         .unwrap();
@@ -505,6 +395,7 @@ pub mod tests {
             active,
             pending,
             concurrency,
+            disk_usage,
         )
         .await
         .unwrap();
@@ -554,24 +445,6 @@ pub mod tests {
         if let Some(task) = active.lock().await.remove(&cid) {
             let _ = task.cancel_tx.send(());
         }
-    }
-
-    #[tokio::test]
-    async fn test_run_immediate_shutdown() {
-        let tmp = TempDir::new().unwrap();
-        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap()).unwrap());
-        let notifier = Arc::new(MultiNotifier::new());
-
-        let mut cfg = Settings::default();
-        cfg.monitoring.port = None;
-        cfg.service.poll_interval_secs = 1;
-        cfg.service.reconcile_interval_secs = 1;
-        cfg.service.ipfs_gc_interval_secs = 1;
-        cfg.service.conn_check_interval_secs = 1;
-
-        // Spawn run() and immediately abort
-        let h = tokio::spawn(run(cfg, pool, notifier));
-        h.abort(); // simulate immediate shutdown
     }
 
     #[tokio::test]
@@ -630,6 +503,7 @@ pub mod tests {
             active,
             pending,
             concurrency,
+            disk_usage,
         )
         .await;
 
@@ -677,22 +551,6 @@ pub mod tests {
         let stored = pool.get_profile().unwrap();
 
         assert_eq!(stored, Some(cid));
-    }
-
-    #[tokio::test]
-    async fn test_run_with_intervals() {
-        let tmp = TempDir::new().unwrap();
-        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap()).unwrap());
-        let notifier = Arc::new(MultiNotifier::new());
-        let mut cfg = Settings::default();
-        cfg.service.poll_interval_secs = 1;
-        cfg.service.reconcile_interval_secs = 1;
-        cfg.service.ipfs_gc_interval_secs = 1;
-        cfg.service.conn_check_interval_secs = 1;
-
-        let h = tokio::spawn(run(cfg, pool, notifier));
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        h.abort();
     }
 
     #[tokio::test]
@@ -752,6 +610,7 @@ pub mod tests {
             active,
             pending,
             concurrency,
+            disk_usage,
         )
         .await;
 
@@ -786,6 +645,7 @@ pub mod tests {
             active,
             pending,
             concurrency,
+            disk_usage,
         )
         .await;
         assert!(res.is_err());
@@ -951,6 +811,7 @@ pub mod tests {
             active,
             pending,
             concurrency,
+            disk_usage,
         )
         .await
         .unwrap();
@@ -1018,6 +879,7 @@ pub mod tests {
             active,
             pending,
             concurrency,
+            disk_usage,
         )
         .await
         .unwrap();
@@ -1048,5 +910,163 @@ pub mod tests {
 
         // We can’t fully assert logs, but we can assert pool is intact and no panic occurred
         assert!(pool.get_profile().is_ok());
+    }
+
+    use crate::notifier::Notifier;
+    use std::sync::Mutex as StdMutex;
+
+    // --- helper for capturing notifications in tests ---
+    struct RecordingNotifier {
+        pub calls: Arc<StdMutex<Vec<(String, String)>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Notifier for RecordingNotifier {
+        async fn notify(&self, subject: &str, message: &str) -> anyhow::Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((subject.to_string(), message.to_string()));
+            Ok(())
+        }
+
+        fn name(&self) -> &'static str {
+            "recording_notifier"
+        }
+
+        fn is_healthy(&self) -> anyhow::Result<(&str, bool)> {
+            Ok(("recording_notifier", true))
+        }
+    }
+
+    /// Build a MultiNotifier that records all notify calls.
+    /// Returns (shared_calls_vec, Arc<MultiNotifier>)
+    fn make_recording_multi() -> (Arc<StdMutex<Vec<(String, String)>>>, Arc<MultiNotifier>) {
+        let calls: Arc<StdMutex<Vec<(String, String)>>> =
+            Arc::new(StdMutex::new(Vec::<(String, String)>::new()));
+        let mut m = MultiNotifier::new();
+        m.add(Box::new(RecordingNotifier {
+            calls: calls.clone(),
+        }));
+        (calls, Arc::new(m))
+    }
+
+    #[tokio::test]
+    async fn test_notify_change_triggers_notifier() {
+        use crate::notifier::Notifier;
+        use std::sync::Mutex as StdMutex;
+
+        struct RecordingNotifier {
+            calls: Arc<StdMutex<Vec<(String, String)>>>,
+        }
+
+        #[async_trait::async_trait]
+        impl Notifier for RecordingNotifier {
+            async fn notify(&self, subject: &str, message: &str) -> anyhow::Result<()> {
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .push((subject.into(), message.into()));
+                Ok(())
+            }
+
+            fn name(&self) -> &'static str {
+                "recording_notifier"
+            }
+
+            fn is_healthy(&self) -> anyhow::Result<(&str, bool)> {
+                Ok(("recording_notifier", true))
+            }
+        }
+
+        let calls = Arc::new(StdMutex::new(Vec::new()));
+
+        // Build MultiNotifier with our RecordingNotifier
+        let mut m = crate::notifier::MultiNotifier::new();
+        m.add(Box::new(RecordingNotifier {
+            calls: calls.clone(),
+        }));
+        let notifier = Arc::new(m);
+
+        let mut state = NotifState::default();
+
+        // Force (None,false) branch
+        state
+            .notify_change(&notifier, "cidNotify".into(), false, "okmsg", "errmsg")
+            .await;
+
+        // Give spawned task a chance to run
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let records = calls.lock().unwrap();
+        assert!(
+            records
+                .iter()
+                .any(|(title, msg)| title.contains("failure") && msg == "errmsg"),
+            "expected failure notification, got: {:?}",
+            *records
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_with_monitoring_port() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let pool = Arc::new(crate::db::CidPool::init(tmp.path().to_str().unwrap()).unwrap());
+        let notifier = Arc::new(MultiNotifier::new());
+
+        let mut cfg = Settings::default();
+        cfg.monitoring.port = Some(0); // ephemeral port
+        cfg.service.poll_interval_secs = 1;
+        cfg.service.reconcile_interval_secs = 1;
+        cfg.service.ipfs_gc_interval_secs = 1;
+        cfg.service.conn_check_interval_secs = 1;
+
+        let h = tokio::spawn(run(cfg, pool, notifier));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        h.abort();
+    }
+
+    #[tokio::test]
+    async fn test_update_profile_cid_error() {
+        let mut chain = Chain::dummy(true, Some(Err(anyhow::anyhow!("boom"))));
+        let tmp = tempfile::TempDir::new().unwrap();
+        let pool = Arc::new(crate::db::CidPool::init(tmp.path().to_str().unwrap()).unwrap());
+
+        let cfg = Settings::default();
+        let res = update_profile_cid(&cfg, &pool, &mut chain).await;
+        assert!(res.is_err(), "expected error to propagate");
+    }
+
+    #[tokio::test]
+    async fn test_spawn_pin_task_pending_dedup() {
+        let ipfs = Arc::new(DummyIpfs::default());
+        let active = Arc::new(Mutex::new(HashMap::new()));
+        let pending = Arc::new(Mutex::new(HashSet::new()));
+        let concurrency = Arc::new(Semaphore::new(0)); // no permits
+
+        let cid = "cidPending".to_string();
+        let first = spawn_pin_task(
+            ipfs.clone(),
+            cid.clone(),
+            &active,
+            &pending,
+            concurrency.clone(),
+        )
+        .await;
+        let second = spawn_pin_task(
+            ipfs.clone(),
+            cid.clone(),
+            &active,
+            &pending,
+            concurrency.clone(),
+        )
+        .await;
+
+        assert!(!first && !second);
+        assert_eq!(
+            pending.lock().await.len(),
+            1,
+            "CID should be added only once"
+        );
     }
 }

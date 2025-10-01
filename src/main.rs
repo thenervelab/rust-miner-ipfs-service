@@ -82,6 +82,7 @@ async fn main() -> Result<()> {
                 active_pins.clone(),
                 pending_pins.clone(),
                 concurrency.clone(),
+                crate::disk::disk_usage,
             )
             .await?
 

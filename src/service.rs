@@ -334,6 +334,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                                 active_pins.clone(),
                                 pending_pins.clone(),
                                 concurrency.clone(),
+                                disk_usage,
                             ).await {
                             tracing::error!(error=?e, "reconcile_failed");
                              notif_state.lock().await.notify_change(
@@ -420,8 +421,7 @@ pub async fn update_profile_cid(
 
 //    pool: &Arc<P>,
 //    ipfs: &Arc<C>,
-
-pub async fn reconcile_once<P, C>(
+pub async fn reconcile_once<P, C, F>(
     pool: &Arc<P>,
     ipfs: &Arc<C>,
     notifier: &Arc<MultiNotifier>,
@@ -429,10 +429,12 @@ pub async fn reconcile_once<P, C>(
     active_pins: Arc<Mutex<HashMap<String, ActiveTask>>>,
     pending_pins: PinSet,
     concurrency: Arc<Semaphore>,
+    disk_fn: F,
 ) -> Result<()>
 where
     P: PoolTrait + 'static,
     C: IpfsClient + 'static,
+    F: Fn() -> (Vec<(u64, u64)>, f64),
 {
     tracing::info!("Reconcile commenced");
 
@@ -578,7 +580,7 @@ where
         }
     };
 
-    let (disks, _program_location_disk_usage) = disk_usage();
+    let (disks, _program_location_disk_usage) = disk_fn();
 
     for (i, disk) in disks.iter().enumerate() {
         let available = disk.0 as f64 / disk.1 as f64 * 100.0;
