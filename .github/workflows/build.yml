@@ -109,6 +109,28 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # so we can push back to main
+
+      - name: Install cargo-edit
+        run: cargo install cargo-edit
+
+      - name: Update Cargo.toml version from tag
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "Setting Cargo.toml version to $VERSION"
+          cargo set-version $VERSION
+
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          # only commit if there are changes
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit -am "chore: bump version to $VERSION"
+            git push origin HEAD:main
+          fi
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
