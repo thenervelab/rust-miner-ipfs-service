@@ -6,12 +6,21 @@ use figment::{
 };
 use serde::{Deserialize, Serialize};
 
+const DEFAULT_POLL_INTERVAL_SECS: u64 = 12;
+const DEFAULT_RECONCILE_INTERVAL_SECS: u64 = 12;
+const HEALTH_CHECK_INTERVAL_SECS: u64 = 30;
+const IPFS_CAT_TIMEOUT_SECS: u64 = 30;
+const IPFS_GC_INTERVAL_SECS: u64 = 3600;
+const DEFAULT_CONCURRENCY: usize = 32;
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ServiceCfg {
     pub poll_interval_secs: u64,
     pub reconcile_interval_secs: u64,
-    pub conn_check_interval_secs: u64,
+    pub health_check_interval_secs: u64,
+    pub ipfs_cat_timeout_secs: u64,
     pub ipfs_gc_interval_secs: u64,
+    pub initial_pin_concurrency: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -66,10 +75,12 @@ pub struct Settings {
 pub async fn load(path: Option<&str>, with_env: bool, with_conf: bool) -> Result<Settings> {
     let defaults = Settings {
         service: ServiceCfg {
-            poll_interval_secs: 12,
-            reconcile_interval_secs: 6,
-            ipfs_gc_interval_secs: 3600,
-            conn_check_interval_secs: 6,
+            poll_interval_secs: DEFAULT_POLL_INTERVAL_SECS,
+            reconcile_interval_secs: DEFAULT_RECONCILE_INTERVAL_SECS,
+            health_check_interval_secs: HEALTH_CHECK_INTERVAL_SECS,
+            ipfs_cat_timeout_secs: IPFS_CAT_TIMEOUT_SECS,
+            ipfs_gc_interval_secs: IPFS_GC_INTERVAL_SECS,
+            initial_pin_concurrency: DEFAULT_CONCURRENCY,
         },
         db: DbCfg {
             path: "./miner_db_pool".into(),
@@ -210,6 +221,7 @@ mod tests {
                 let key = k.as_ref().to_string();
                 let previous = std::env::var_os(&key);
                 self.prev.push((key.clone(), previous));
+                // unsafe but only used in tests to emulate environment
                 unsafe { std::env::set_var(&key, v.as_ref()) };
             }
         }
@@ -218,7 +230,9 @@ mod tests {
             fn drop(&mut self) {
                 for (key, maybe_val) in self.prev.drain(..) {
                     match maybe_val {
+                        // unsafe but only used in tests to emulate environment
                         Some(val) => unsafe { std::env::set_var(&key, val) },
+                        // unsafe but only used in tests to emulate environment
                         None => unsafe { std::env::remove_var(&key) },
                     }
                 }
@@ -231,8 +245,8 @@ mod tests {
         guard.set("MINER_SERVICE__POLL_INTERVAL_SECS", "123");
 
         // Debug: confirm env vars are set correctly before calling load
-        println!("MINER_DB__PATH = {:?}", std::env::var("MINER_DB__PATH"));
-        println!(
+        tracing::info!("MINER_DB__PATH = {:?}", std::env::var("MINER_DB__PATH"));
+        tracing::info!(
             "MINER_SERVICE__POLL_INTERVAL_SECS = {:?}",
             std::env::var("MINER_SERVICE__POLL_INTERVAL_SECS")
         );

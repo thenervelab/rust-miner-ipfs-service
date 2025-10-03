@@ -121,7 +121,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
     let pending_pins: PinSet = Arc::new(Mutex::new(HashSet::new()));
     let stalled_pins: PinSet = Arc::new(Mutex::new(HashSet::new()));
 
-    let concurrency = Arc::new(Semaphore::new(64));
+    let concurrency = Arc::new(Semaphore::new(cfg.service.initial_pin_concurrency));
 
     tokio::select! {
         _ = shutdown.notified() => {
@@ -208,7 +208,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
     gc.tick().await;
 
     let mut health_check =
-        time::interval(Duration::from_secs(cfg.service.conn_check_interval_secs));
+        time::interval(Duration::from_secs(cfg.service.health_check_interval_secs));
     health_check.tick().await;
 
     // reset last_progress_at values to current time so that node downtime does not trigger stalled progress detection
@@ -331,9 +331,9 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                     }
                     _ = async {
                         if let Err(e) = reconcile_once(&pool, &ipfs, &notifier, &notif_state,
-                                active_pins.clone(),
-                                pending_pins.clone(),
-                                concurrency.clone(),
+                                &active_pins,
+                                &pending_pins,
+                                &concurrency,
                                 disk_usage,
                             ).await {
                             tracing::error!(error=?e, "reconcile_failed");
@@ -419,16 +419,14 @@ pub async fn update_profile_cid(
     Ok(())
 }
 
-//    pool: &Arc<P>,
-//    ipfs: &Arc<C>,
 pub async fn reconcile_once<P, C, F>(
     pool: &Arc<P>,
     ipfs: &Arc<C>,
     notifier: &Arc<MultiNotifier>,
     notif_state: &Arc<Mutex<NotifState>>,
-    active_pins: Arc<Mutex<HashMap<String, ActiveTask>>>,
-    pending_pins: PinSet,
-    concurrency: Arc<Semaphore>,
+    active_pins: &Arc<Mutex<HashMap<String, ActiveTask>>>,
+    pending_pins: &PinSet,
+    concurrency: &Arc<Semaphore>,
     disk_fn: F,
 ) -> Result<()>
 where
@@ -457,8 +455,6 @@ where
     let desired: Vec<String> = profile.iter().map(|p| p.cid.trim().to_string()).collect();
 
     for cid in desired.iter() {
-        let cid = cid.clone();
-        let ipfs = ipfs.clone();
         if spawn_pin_task(
             ipfs.clone(),
             cid.clone(),
@@ -470,7 +466,7 @@ where
         {
             // triggers when new pin task background thread is started (spawn_pin_task returns true)
 
-            let _ = pool.touch_progress(&cid);
+            let _ = pool.touch_progress(cid);
             let notifier = notifier.clone();
             let cid = cid.clone();
             let notif_state_t = notif_state.clone();
@@ -648,8 +644,6 @@ async fn spawn_pin_task<C: IpfsClient + 'static>(
         );
 
         tokio::spawn({
-            let ipfs = ipfs.clone();
-            let cid = cid.clone();
             let active_map = active_pins.clone();
 
             async move {

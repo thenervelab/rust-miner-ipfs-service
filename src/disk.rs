@@ -1,6 +1,6 @@
 use std::env;
 use std::path::PathBuf;
-use sysinfo::{DiskExt, System, SystemExt};
+use sysinfo::{Disks, System};
 
 /// Trait to abstract over real vs mocked disk providers.
 pub trait DiskProvider {
@@ -10,27 +10,26 @@ pub trait DiskProvider {
 
 /// Real provider that uses `sysinfo`.
 pub struct SysDiskProvider {
+    #[allow(dead_code)]
     sys: System,
+    disks: Disks,
 }
 
 impl SysDiskProvider {
     pub fn new() -> Self {
-        let mut sys = System::new_all();
-        sys.refresh_disks_list();
-        sys.refresh_disks();
-        Self { sys }
+        let sys = System::new(); // no automatic refresh
+        let disks = Disks::new_with_refreshed_list(); // initializes and refreshes disks
+        Self { sys, disks }
     }
 }
 
 impl DiskProvider for SysDiskProvider {
     fn refresh(&mut self) {
-        self.sys.refresh_disks_list();
-        self.sys.refresh_disks();
+        self.disks.refresh(true); // remove_not_listed_disks = true
     }
 
     fn disks(&self) -> Vec<(u64, u64, PathBuf)> {
-        self.sys
-            .disks()
+        self.disks
             .iter()
             .map(|d| {
                 (
@@ -140,8 +139,8 @@ mod tests {
 
         // Debug info if it fails on CI
         let cwd_actual = env::current_dir().unwrap();
-        eprintln!("mount_point = {:?}", mount_point);
-        eprintln!("cwd_actual   = {:?}", cwd_actual);
+        tracing::info!("mount_point = {:?}", mount_point);
+        tracing::info!("cwd_actual   = {:?}", cwd_actual);
 
         let (_disks, usage) = disk_usage_with(&mut mock);
         assert_eq!(

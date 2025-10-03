@@ -79,9 +79,9 @@ async fn main() -> Result<()> {
                 &ipfs,
                 &notifier,
                 &notif_state,
-                active_pins.clone(),
-                pending_pins.clone(),
-                concurrency.clone(),
+                &active_pins,
+                &pending_pins,
+                &concurrency,
                 crate::disk::disk_usage,
             )
             .await?

@@ -251,9 +251,9 @@ pub mod tests {
             &ipfs,
             &notifier,
             &notif_state,
-            active,
-            pending,
-            concurrency,
+            &active,
+            &pending,
+            &concurrency,
             disk_usage,
         )
         .await;
@@ -284,9 +284,9 @@ pub mod tests {
             &ipfs,
             &notifier,
             &notif_state,
-            active,
-            pending,
-            concurrency,
+            &active,
+            &pending,
+            &concurrency,
             disk_usage,
         )
         .await;
@@ -327,9 +327,9 @@ pub mod tests {
             &ipfs,
             &notifier,
             &notif_state,
-            active,
-            pending,
-            concurrency,
+            &active,
+            &pending,
+            &concurrency,
             disk_usage,
         )
         .await;
@@ -378,9 +378,9 @@ pub mod tests {
             &ipfs_low,
             &notifier,
             &notif_state,
-            active.clone(),
-            pending.clone(),
-            concurrency.clone(),
+            &active,
+            &pending,
+            &concurrency,
             disk_usage,
         )
         .await
@@ -392,9 +392,9 @@ pub mod tests {
             &ipfs_high,
             &notifier,
             &notif_state,
-            active,
-            pending,
-            concurrency,
+            &active,
+            &pending,
+            &concurrency,
             disk_usage,
         )
         .await
@@ -500,9 +500,9 @@ pub mod tests {
             &ipfs,
             &notifier,
             &notif_state,
-            active,
-            pending,
-            concurrency,
+            &active,
+            &pending,
+            &concurrency,
             disk_usage,
         )
         .await;
@@ -607,9 +607,9 @@ pub mod tests {
             &ipfs,
             &notifier,
             &notif_state,
-            active,
-            pending,
-            concurrency,
+            &active,
+            &pending,
+            &concurrency,
             disk_usage,
         )
         .await;
@@ -642,9 +642,9 @@ pub mod tests {
             &ipfs,
             &notifier,
             &notif_state,
-            active,
-            pending,
-            concurrency,
+            &active,
+            &pending,
+            &concurrency,
             disk_usage,
         )
         .await;
@@ -808,9 +808,9 @@ pub mod tests {
             &ipfs,
             &notifier,
             &notif_state,
-            active,
-            pending,
-            concurrency,
+            &active,
+            &pending,
+            &concurrency,
             disk_usage,
         )
         .await
@@ -876,9 +876,9 @@ pub mod tests {
             &ipfs,
             &notifier,
             &notif_state,
-            active,
-            pending,
-            concurrency,
+            &active,
+            &pending,
+            &concurrency,
             disk_usage,
         )
         .await
@@ -897,7 +897,7 @@ pub mod tests {
         cfg.service.poll_interval_secs = 1;
         cfg.service.reconcile_interval_secs = 1;
         cfg.service.ipfs_gc_interval_secs = 1;
-        cfg.service.conn_check_interval_secs = 1;
+        cfg.service.health_check_interval_secs = 1;
 
         // Start run() in background
         let handle = tokio::spawn(run(cfg, pool.clone(), notifier.clone()));
@@ -910,45 +910,6 @@ pub mod tests {
 
         // We can’t fully assert logs, but we can assert pool is intact and no panic occurred
         assert!(pool.get_profile().is_ok());
-    }
-
-    use crate::notifier::Notifier;
-    use std::sync::Mutex as StdMutex;
-
-    // --- helper for capturing notifications in tests ---
-    struct RecordingNotifier {
-        pub calls: Arc<StdMutex<Vec<(String, String)>>>,
-    }
-
-    #[async_trait::async_trait]
-    impl Notifier for RecordingNotifier {
-        async fn notify(&self, subject: &str, message: &str) -> anyhow::Result<()> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push((subject.to_string(), message.to_string()));
-            Ok(())
-        }
-
-        fn name(&self) -> &'static str {
-            "recording_notifier"
-        }
-
-        fn is_healthy(&self) -> anyhow::Result<(&str, bool)> {
-            Ok(("recording_notifier", true))
-        }
-    }
-
-    /// Build a MultiNotifier that records all notify calls.
-    /// Returns (shared_calls_vec, Arc<MultiNotifier>)
-    fn make_recording_multi() -> (Arc<StdMutex<Vec<(String, String)>>>, Arc<MultiNotifier>) {
-        let calls: Arc<StdMutex<Vec<(String, String)>>> =
-            Arc::new(StdMutex::new(Vec::<(String, String)>::new()));
-        let mut m = MultiNotifier::new();
-        m.add(Box::new(RecordingNotifier {
-            calls: calls.clone(),
-        }));
-        (calls, Arc::new(m))
     }
 
     #[tokio::test]
@@ -1019,7 +980,7 @@ pub mod tests {
         cfg.service.poll_interval_secs = 1;
         cfg.service.reconcile_interval_secs = 1;
         cfg.service.ipfs_gc_interval_secs = 1;
-        cfg.service.conn_check_interval_secs = 1;
+        cfg.service.health_check_interval_secs = 1;
 
         let h = tokio::spawn(run(cfg, pool, notifier));
         tokio::time::sleep(Duration::from_millis(50)).await;
