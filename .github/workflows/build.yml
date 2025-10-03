@@ -43,6 +43,7 @@ jobs:
 
   build:
     needs: [always-succeed, version-bump]
+    if: always()
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
