@@ -36,10 +36,13 @@ jobs:
           git commit -am "chore: bump version to $VERSION"
           git push origin HEAD:main
 
-
+  always-succeed:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Trigger build even if no tag present"
 
   build:
-    needs: version-bump
+    needs: [always-succeed, version-bump]
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
