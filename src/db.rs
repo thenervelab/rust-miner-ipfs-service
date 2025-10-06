@@ -24,6 +24,7 @@ pub trait PoolTrait: Send + Sync {
     fn touch_progress(&self, cid: &str) -> Result<()>;
     fn record_failure(&self, cid: Option<&str>, action: &str, error: &str) -> Result<()>;
     fn completed_pins(&self) -> Result<HashSet<String>>;
+    fn mark_incomplete(&self, cid: &str) -> Result<()>;
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -350,6 +351,19 @@ impl CidPool {
 
         Ok(completed)
     }
+
+    pub fn mark_incomplete(&self, cid: &str) -> Result<()> {
+        let key = cid.as_bytes();
+
+        if let Some(val) = self.db.get(0, key)? {
+            let (mut rec, _): (PinRecord, usize) = decode_from_slice(&val, config::standard())?;
+            rec.sync_complete = false;
+
+            let new_val = encode_to_vec(&rec, config::standard())?;
+            self.db.commit([(0, key, Some(new_val))])?;
+        }
+        Ok(())
+    }
 }
 
 impl PoolTrait for CidPool {
@@ -377,6 +391,9 @@ impl PoolTrait for CidPool {
     }
     fn completed_pins(&self) -> Result<HashSet<String>> {
         self.completed_pins()
+    }
+    fn mark_incomplete(&self, cid: &str) -> Result<()> {
+        self.mark_incomplete(cid)
     }
 }
 

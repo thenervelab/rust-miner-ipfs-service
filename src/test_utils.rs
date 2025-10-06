@@ -131,4 +131,8 @@ impl PoolTrait for DummyPool {
     fn completed_pins(&self) -> Result<HashSet<String>> {
         Ok(HashSet::new())
     }
+
+    fn mark_incomplete(&self, _cid: &str) -> Result<()> {
+        Ok(())
+    }
 }

@@ -831,6 +831,8 @@ where
                         let _ = task.cancel_tx.send(());
                     }
 
+                    let _ = pool.mark_incomplete(cid);
+
                     let _ = pool.record_failure(
                         Some(cid),
                         "verify",
