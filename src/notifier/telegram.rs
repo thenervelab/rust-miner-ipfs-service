@@ -48,6 +48,16 @@ impl TelegramNotifier {
                     .send()
                     .await
                     .context("telegram getUpdates failed")?;
+
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let body = resp
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "<failed to read body>".into());
+                    anyhow::bail!("telegram getUpdates failed: {} - {}", status, body);
+                }
+
                 let json: serde_json::Value = resp.json().await?;
                 let updates: Vec<TelegramUpdate> = serde_json::from_value(json["result"].clone())
                     .context("invalid Telegram updates")?;
@@ -76,12 +86,22 @@ impl Notifier for TelegramNotifier {
     async fn notify(&self, subject: &str, message: &str) -> Result<()> {
         let text = format!("🚨 {}\n{}", subject, message);
         let url = format!("{}/bot{}/sendMessage", self.base_url, self.bot_token);
-        self.client
+        let resp = self
+            .client
             .post(&url)
             .json(&serde_json::json!({"chat_id": self.chat_id, "text": text}))
             .send()
-            .await?
-            .error_for_status()?;
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "<failed to read body>".into());
+            anyhow::bail!("telegram notify failed: {} - {}", status, body);
+        }
+
         Ok(())
     }
 
