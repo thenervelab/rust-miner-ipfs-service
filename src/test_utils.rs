@@ -14,7 +14,7 @@ use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 
 pub struct DummyIpfs {
-    pub cat_json_result: Result<serde_json::Value>,
+    pub cat_result: Result<serde_json::Value>,
     pub pin_rm_result: Result<()>,
     pub pin_verify_result: Result<Vec<PinState>>,
     pub pin_ls_all_result: Result<HashSet<String>>,
@@ -24,7 +24,7 @@ pub struct DummyIpfs {
 impl Default for DummyIpfs {
     fn default() -> Self {
         Self {
-            cat_json_result: Ok(serde_json::json!({})), // empty JSON
+            cat_result: Ok(serde_json::json!({})), // empty JSON
             pin_rm_result: Ok(()),
             pin_verify_result: Ok(vec![]),
             pin_ls_all_result: Ok(HashSet::new()),
@@ -35,11 +35,11 @@ impl Default for DummyIpfs {
 
 #[async_trait]
 impl IpfsClient for DummyIpfs {
-    async fn cat_json<T>(&self, _cid: &str) -> Result<T>
+    async fn cat<T>(&self, _cid: &str) -> Result<T>
     where
         T: serde::de::DeserializeOwned + Send,
     {
-        match &self.cat_json_result {
+        match &self.cat_result {
             Ok(val) => {
                 // clone the JSON, which *is* Clone
                 let v = val.clone();

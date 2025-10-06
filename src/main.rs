@@ -4,6 +4,7 @@ mod ipfs;
 mod model;
 mod monitoring;
 mod notifier;
+mod parse;
 mod service;
 mod settings;
 mod substrate;

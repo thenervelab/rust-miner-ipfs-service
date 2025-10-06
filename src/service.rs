@@ -443,9 +443,9 @@ where
     };
 
     let profile: Vec<FileInfo> = ipfs
-        .cat_json::<Vec<FileInfo>>(&profile_cid)
+        .cat::<Vec<FileInfo>>(&profile_cid)
         .await
-        .context("Failed to get miner profile json from IPFS")?;
+        .context("Failed to get miner profile from IPFS")?;
 
     tracing::info!(pins = profile.len(), "profile_loaded");
 

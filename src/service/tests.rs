@@ -234,7 +234,7 @@ pub mod tests {
     async fn test_reconcile_once_no_profile() {
         let pool = Arc::new(DummyPool::default());
         let ipfs = Arc::new(DummyIpfs {
-            cat_json_result: Err(anyhow::anyhow!("not called")),
+            cat_result: Err(anyhow::anyhow!("not called")),
             pin_rm_result: Ok(()),
             pin_verify_result: Ok(vec![]),
             pin_ls_all_result: Ok(HashSet::new()),
@@ -268,7 +268,7 @@ pub mod tests {
         });
         let ipfs = Arc::new(DummyIpfs {
             pin_ls_all_result: Ok(HashSet::new()),
-            cat_json_result: Ok(serde_json::json!({"foo": "bar"})),
+            cat_result: Ok(serde_json::json!({"foo": "bar"})),
             pin_rm_result: Ok(()),
             pin_verify_result: Ok(vec![]),
             health_ok: true,
@@ -302,7 +302,7 @@ pub mod tests {
 
         let ipfs = Arc::new(DummyIpfs {
             // pretend the profile exists and has no files
-            cat_json_result: Ok(serde_json::json!(Vec::<FileInfo>::new())),
+            cat_result: Ok(serde_json::json!(Vec::<FileInfo>::new())),
 
             // returning an empty pin list is fine
             pin_ls_all_result: Ok(HashSet::new()),
@@ -351,7 +351,7 @@ pub mod tests {
     async fn test_reconcile_once_disk_low_high() {
         let pool = Arc::new(DummyPool::default());
         let ipfs_low = Arc::new(DummyIpfs {
-            cat_json_result: Ok(serde_json::json!({"foo": "bar"})),
+            cat_result: Ok(serde_json::json!({"foo": "bar"})),
             pin_rm_result: Ok(()),
             pin_verify_result: Ok(vec![]),
             pin_ls_all_result: Ok(HashSet::new()),
@@ -359,7 +359,7 @@ pub mod tests {
         });
 
         let ipfs_high = Arc::new(DummyIpfs {
-            cat_json_result: Ok(serde_json::json!({"foo": "bar"})),
+            cat_result: Ok(serde_json::json!({"foo": "bar"})),
             pin_rm_result: Ok(()),
             pin_verify_result: Ok(vec![]),
             pin_ls_all_result: Ok(HashSet::new()),
@@ -471,7 +471,7 @@ pub mod tests {
         }];
 
         let ipfs = Arc::new(DummyIpfs {
-            cat_json_result: Ok(serde_json::to_value(file_infos).unwrap()),
+            cat_result: Ok(serde_json::to_value(file_infos).unwrap()),
             pin_verify_result: Ok(vec![
                 PinState {
                     cid: "cidErr".into(),
@@ -593,7 +593,7 @@ pub mod tests {
         let ipfs = Arc::new(DummyIpfs {
             pin_rm_result: Err(anyhow::anyhow!("fail rm")),
             pin_ls_all_result: Ok(HashSet::from([cid.clone()])),
-            cat_json_result: Ok(serde_json::json!(Vec::<FileInfo>::new())),
+            cat_result: Ok(serde_json::json!(Vec::<FileInfo>::new())),
             ..Default::default()
         });
         let notifier = Arc::new(MultiNotifier::new());
@@ -622,13 +622,13 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn test_reconcile_once_cat_json_error() {
+    async fn test_reconcile_once_cat_error() {
         let pool = Arc::new(DummyPool {
             profile: Some("cid".into()),
             ..Default::default()
         });
         let ipfs = Arc::new(DummyIpfs {
-            cat_json_result: Err(anyhow::anyhow!("bad json")),
+            cat_result: Err(anyhow::anyhow!("bad json")),
             ..Default::default()
         });
         let notifier = Arc::new(MultiNotifier::new());
@@ -779,7 +779,7 @@ pub mod tests {
         }];
 
         let ipfs = Arc::new(DummyIpfs {
-            cat_json_result: Ok(serde_json::to_value(file_infos).unwrap()),
+            cat_result: Ok(serde_json::to_value(file_infos).unwrap()),
             pin_verify_result: Ok(vec![
                 PinState {
                     cid: "cidErr".into(),
@@ -861,7 +861,7 @@ pub mod tests {
         });
 
         let ipfs = Arc::new(DummyIpfs {
-            cat_json_result: Ok(serde_json::json!(Vec::<FileInfo>::new())),
+            cat_result: Ok(serde_json::json!(Vec::<FileInfo>::new())),
             ..Default::default()
         });
 

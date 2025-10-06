@@ -1,12 +1,14 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use futures_util::StreamExt;
 use reqwest::Url;
+use serde::de::DeserializeOwned;
 use serde_json::Deserializer;
 use std::collections::HashSet;
 use std::time::Duration;
 
 use crate::{
     model::PinState,
+    parse::{parse_json, parse_parquet},
     service::{PinProgress, ProgressSender},
 };
 
@@ -18,7 +20,7 @@ pub struct Client {
 
 #[async_trait::async_trait]
 pub trait IpfsClient: Send + Sync {
-    async fn cat_json<T: serde::de::DeserializeOwned + Send>(&self, cid: &str) -> Result<T>;
+    async fn cat<T: serde::de::DeserializeOwned + Send>(&self, cid: &str) -> Result<T>;
     async fn pin_add_with_progress(&self, cid: &str, tx: ProgressSender) -> Result<()>;
     async fn pin_rm(&self, cid: &str) -> Result<()>;
     async fn pin_verify(&self) -> Result<Vec<PinState>>;
@@ -46,23 +48,27 @@ impl Client {
         Ok(())
     }
 
-    pub async fn cat_json<T: for<'de> serde::Deserialize<'de>>(&self, cid: &str) -> Result<T> {
-        // Try gateway first if base looks like a gateway, otherwise use /api/v0/cat
+    pub async fn cat<T>(&self, cid: &str) -> Result<T>
+    where
+        T: DeserializeOwned,
+    {
         let url = self.base.join("/api/v0/cat")?;
-
         let resp = async_std::future::timeout(
             Duration::from_secs(30),
             self.http.post(url).query(&[("arg", cid)]).send(),
         )
-        .await;
+        .await??
+        .error_for_status()?;
 
-        let resp = resp??.error_for_status()?;
+        let bytes = resp.bytes().await?;
 
-        let body = resp.text().await?;
+        if let Ok(text) = std::str::from_utf8(&bytes) {
+            if let Ok(val) = parse_json::<T>(text) {
+                return Ok(val);
+            }
+        }
 
-        let json: T = serde_json::from_str(&body).context("invalid_profile_json")?;
-
-        Ok(json)
+        parse_parquet::<T>(&bytes)
     }
 
     pub async fn pin_add_with_progress(&self, cid: &str, tx: ProgressSender) -> Result<()> {
@@ -226,8 +232,8 @@ impl Client {
 
 #[async_trait::async_trait]
 impl IpfsClient for Client {
-    async fn cat_json<T: serde::de::DeserializeOwned + Send>(&self, cid: &str) -> Result<T> {
-        self.cat_json(cid).await
+    async fn cat<T: serde::de::DeserializeOwned + Send>(&self, cid: &str) -> Result<T> {
+        self.cat(cid).await
     }
 
     async fn pin_add_with_progress(&self, cid: &str, tx: ProgressSender) -> anyhow::Result<()> {
@@ -289,7 +295,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cat_json_valid_and_invalid() {
+    async fn cat_valid_and_invalid() {
         let server = MockServer::start();
 
         server.mock(|when, then| {
@@ -310,11 +316,11 @@ mod tests {
         }
 
         // valid
-        let val: Dummy = client.cat_json("cid1").await.unwrap();
+        let val: Dummy = client.cat("cid1").await.unwrap();
         assert_eq!(val.name, "alice");
 
         // invalid
-        let res: Result<Dummy> = client.cat_json("cid2").await;
+        let res: Result<Dummy> = client.cat("cid2").await;
         assert!(res.is_err());
     }
 
@@ -463,7 +469,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn trait_forwarding_cat_json() {
+    async fn trait_forwarding_cat() {
         let server = MockServer::start();
         server.mock(|when, then| {
             when.path("/api/v0/cat");
@@ -471,7 +477,7 @@ mod tests {
         });
 
         let client = Client::new(server.base_url());
-        let obj: Dummy = IpfsClient::cat_json(&client, "cidx").await.unwrap();
+        let obj: Dummy = IpfsClient::cat(&client, "cidx").await.unwrap();
         assert_eq!(obj.name, "bob");
     }
 }
