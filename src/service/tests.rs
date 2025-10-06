@@ -102,8 +102,11 @@ pub mod tests {
             },
         );
 
+        let ipfs = Arc::new(DummyIpfs::default());
+
         let res = update_progress_cid(
             &pool,
+            &ipfs,
             &notifier,
             &notif_state,
             active.clone(),
@@ -218,8 +221,11 @@ pub mod tests {
         // Simulate DB saying it’s stalled
         pool.touch_progress("cidStalled").unwrap();
 
+        let ipfs = Arc::new(DummyIpfs::default());
+
         let res = update_progress_cid(
             &pool,
+            &ipfs,
             &notifier,
             &notif_state,
             active.clone(),
@@ -424,8 +430,18 @@ pub mod tests {
             },
         );
 
-        let res =
-            update_progress_cid(&pool, &notifier, &notif_state, active, stalled, concurrency).await;
+        let ipfs = Arc::new(DummyIpfs::default());
+
+        let res = update_progress_cid(
+            &pool,
+            &ipfs,
+            &notifier,
+            &notif_state,
+            active,
+            stalled,
+            concurrency,
+        )
+        .await;
         assert!(res.is_ok());
     }
 
@@ -691,8 +707,22 @@ pub mod tests {
             },
         );
 
+        let ipfs = Arc::new(DummyIpfs {
+            cat_result: Ok(serde_json::json!(Vec::<FileInfo>::new())),
+            pin_rm_result: Ok(()),
+            pin_verify_result: Ok(vec![PinState {
+                cid: "cidX".into(),
+                ok: true,
+                err: None,
+                pin_status: None,
+            }]),
+            pin_ls_all_result: Ok(HashSet::from(["cidX".to_string()])),
+            health_ok: true,
+        });
+
         let res = update_progress_cid(
             &pool,
+            &ipfs,
             &notifier,
             &notif_state,
             active_pins.clone(),
@@ -741,8 +771,11 @@ pub mod tests {
             },
         );
 
+        let ipfs = Arc::new(DummyIpfs::default());
+
         let _ = update_progress_cid(
             &pool,
+            &ipfs,
             &notifier,
             &notif_state,
             active,
@@ -850,6 +883,9 @@ pub mod tests {
         }
         fn touch_progress(&self, _: &str) -> Result<()> {
             Ok(())
+        }
+        fn completed_pins(&self) -> Result<HashSet<String>> {
+            Ok(HashSet::new())
         }
     }
 

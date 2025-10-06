@@ -23,6 +23,7 @@ pub trait PoolTrait: Send + Sync {
     fn get_profile(&self) -> Result<Option<String>>;
     fn touch_progress(&self, cid: &str) -> Result<()>;
     fn record_failure(&self, cid: Option<&str>, action: &str, error: &str) -> Result<()>;
+    fn completed_pins(&self) -> Result<HashSet<String>>;
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -335,6 +336,20 @@ impl CidPool {
 
         Ok(())
     }
+
+    pub fn completed_pins(&self) -> Result<HashSet<String>> {
+        let mut iter = self.db.iter(0)?; // column 0 = pins
+        let mut completed = HashSet::new();
+
+        while let Some((key, val)) = iter.next()? {
+            let (rec, _): (PinRecord, usize) = decode_from_slice(&val, config::standard())?;
+            if rec.sync_complete {
+                completed.insert(String::from_utf8(key.to_vec())?);
+            }
+        }
+
+        Ok(completed)
+    }
 }
 
 impl PoolTrait for CidPool {
@@ -359,6 +374,9 @@ impl PoolTrait for CidPool {
     }
     fn record_failure(&self, cid: Option<&str>, action: &str, error: &str) -> Result<()> {
         self.record_failure(cid, action, error)
+    }
+    fn completed_pins(&self) -> Result<HashSet<String>> {
+        self.completed_pins()
     }
 }
 

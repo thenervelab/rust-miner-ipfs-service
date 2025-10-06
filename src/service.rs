@@ -354,7 +354,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                             ).await;
                         }
 
-                        if let Err(e) = update_progress_cid(&pool, &notifier, &notif_state, active_pins.clone(),  stalled_pins.clone(), concurrency.clone()).await {
+                        if let Err(e) = update_progress_cid(&pool, &ipfs, &notifier, &notif_state, active_pins.clone(),  stalled_pins.clone(), concurrency.clone()).await {
                             tracing::error!(error=?e, "progress update error");
                         }
                    } => {}
@@ -678,14 +678,19 @@ async fn spawn_pin_task<C: IpfsClient + 'static>(
     false
 }
 
-pub async fn update_progress_cid(
-    pool: &Arc<CidPool>,
+pub async fn update_progress_cid<P, C>(
+    pool: &Arc<P>,
+    ipfs: &Arc<C>,
     notifier: &Arc<MultiNotifier>,
     notif_state: &Arc<Mutex<NotifState>>,
     active_pins: Arc<Mutex<HashMap<String, ActiveTask>>>,
     stalled_pins: PinSet,
     concurrency: Arc<Semaphore>,
-) -> Result<()> {
+) -> Result<()>
+where
+    P: PoolTrait + 'static,
+    C: IpfsClient + 'static,
+{
     let mut active = active_pins.lock().await;
     let mut finished = Vec::new();
     let mut errored = Vec::new();
@@ -727,6 +732,23 @@ pub async fn update_progress_cid(
                 }
                 PinProgress::Done => {
                     tracing::info!("CID {} pin complete", &cid[0..16]);
+                    let notifier = notifier.clone();
+                    let cid_t = cid.clone();
+                    let notif_state_t = notif_state.clone();
+
+                    tokio::spawn(async move {
+                        notif_state_t
+                            .lock()
+                            .await
+                            .notify_change(
+                                &notifier,
+                                format!("Completed pin {}", cid_t),
+                                true,
+                                &format!("Pin task completet for {}", cid_t),
+                                "unused",
+                            )
+                            .await;
+                    });
                     finished.push(cid.clone());
                 }
                 PinProgress::Error(ref e) => {
@@ -792,6 +814,51 @@ pub async fn update_progress_cid(
             let _ = task.cancel_tx.send(());
         }
         concurrency.add_permits(1);
+    }
+
+    let completed: HashSet<String> = pool.completed_pins()?;
+    if !completed.is_empty() {
+        match ipfs.pin_verify().await {
+            Ok(pin_states) => {
+                let verified: HashSet<String> = pin_states
+                    .into_iter()
+                    .filter(|p| p.ok)
+                    .map(|p| p.cid)
+                    .collect();
+
+                for cid in completed.difference(&verified) {
+                    if let Some(task) = active.remove(cid) {
+                        let _ = task.cancel_tx.send(());
+                    }
+
+                    let _ = pool.record_failure(
+                        Some(cid),
+                        "verify",
+                        "Completed pin not verifiable on IPFS",
+                    );
+
+                    let notifier = notifier.clone();
+                    let cid = cid.clone();
+                    let notif_state_t = notif_state.clone();
+                    tokio::spawn(async move {
+                        notif_state_t
+                            .lock()
+                            .await
+                            .notify_change(
+                                &notifier,
+                                format!("Completed pin {}", cid),
+                                false,
+                                "unused",
+                                &format!("Pin {} no longer verifiable", cid),
+                            )
+                            .await;
+                    });
+                }
+            }
+            Err(e) => {
+                tracing::error!("pin_verify failed: {:?}", e);
+            }
+        }
     }
 
     Ok(())

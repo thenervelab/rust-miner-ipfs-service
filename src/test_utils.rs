@@ -127,4 +127,8 @@ impl PoolTrait for DummyPool {
     fn touch_progress(&self, _cid: &str) -> Result<()> {
         Ok(())
     }
+
+    fn completed_pins(&self) -> Result<HashSet<String>> {
+        Ok(HashSet::new())
+    }
 }
