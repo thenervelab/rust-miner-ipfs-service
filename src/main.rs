@@ -58,7 +58,10 @@ async fn main() -> Result<()> {
 
     let pool_location = cfg.db.path.clone();
 
-    let pool = Arc::new(CidPool::init(&pool_location)?);
+    let pool = Arc::new(CidPool::init(
+        &pool_location,
+        cfg.service.stalling_pin_task_detection,
+    )?);
 
     let notifier = Arc::new(notifier::build_notifier_from_config(&cfg).await?);
 

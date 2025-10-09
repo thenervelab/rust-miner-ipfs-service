@@ -488,6 +488,8 @@ where
 
     let to_unpin = pool.sync_pins(desired)?;
 
+    let unpinned = to_unpin.len();
+
     for cid in to_unpin {
         tracing::error!("Removing pin");
 
@@ -528,6 +530,36 @@ where
                 tracing::error!(?e, cid, "Unpin failed");
             }
         });
+    }
+
+    if unpinned > 0 {
+        if let Err(e) = ipfs.gc().await {
+            tracing::error!(error=?e, "gc_failed");
+            notif_state
+                .lock()
+                .await
+                .notify_change(
+                    &notifier,
+                    "ipfs_gc".to_string(),
+                    false,
+                    "IPFS GC is working again",
+                    &format!("IPFS GC failed: {}", e),
+                )
+                .await;
+        } else {
+            tracing::info!("gc_done");
+            notif_state
+                .lock()
+                .await
+                .notify_change(
+                    &notifier,
+                    "ipfs_gc".to_string(),
+                    true,
+                    "IPFS GC is working again",
+                    "unused",
+                )
+                .await;
+        }
     }
 
     let pin_state_errors: Result<Vec<PinState>> = async {

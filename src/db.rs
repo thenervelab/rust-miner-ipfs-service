@@ -37,12 +37,13 @@ pub struct PinRecord {
 
 pub struct CidPool {
     db: parity_db::Db,
+    stalling_limit: u64,
 }
 
 impl CidPool {
     /// Initialize the database with 3 columns:
     /// 0 = pins, 1 = service profile, 2 = failures
-    pub fn init(path: &str) -> Result<Self> {
+    pub fn init(path: &str, stalling_limit: u64) -> Result<Self> {
         let mut db_path = PathBuf::from(path);
 
         // If the path looks like a file (has an extension), normalize to a directory
@@ -71,7 +72,7 @@ impl CidPool {
 
         // Try to open existing DB
         match Db::open(&opts) {
-            Ok(db) => Ok(Self { db }),
+            Ok(db) => Ok(Self { db, stalling_limit }),
             Err(e) => {
                 tracing::warn!("Failed to open DB at {:?}: {}. Recreating...", db_path, e);
 
@@ -87,7 +88,7 @@ impl CidPool {
                 opts.columns[2].btree_index = true; // failures → useful to iterate logs
 
                 let db = Db::open_or_create(&opts)?;
-                Ok(Self { db })
+                Ok(Self { db, stalling_limit })
             }
         }
     }
@@ -284,7 +285,7 @@ impl CidPool {
 
             if !rec.sync_complete
                 && rec.last_progress_at > 0
-                && now.saturating_sub(rec.last_progress_at) > 60
+                && now.saturating_sub(rec.last_progress_at) > self.stalling_limit
             {
                 stale.insert(cid.clone());
             }
@@ -415,7 +416,7 @@ mod tests {
 
     fn new_pool() -> (CidPool, TempDir) {
         let dir = TempDir::new().unwrap();
-        let pool = CidPool::init(dir.path().to_str().unwrap()).unwrap();
+        let pool = CidPool::init(dir.path().to_str().unwrap(), 120).unwrap();
         (pool, dir)
     }
 

@@ -32,9 +32,15 @@ cp config.sample.toml config.toml
 ### Sample config (`config.sample.toml`)
 ```toml
 [service]
-poll_interval_secs = 6 # how often to check chain for profile CID changes
-reconcile_interval_secs = 300 # run full reconciliation this often
-ipfs_gc_interval_secs = 3600
+poll_interval_secs = 12 # How often to poll the chain for miner profile json CID changes
+reconcile_interval_secs = 12 # How often check progress on ongoing pin tasks
+health_check_interval_secs = 30 # How often to check substrate / ipfs node connection
+ipfs_cat_timeout_secs = 30 # How long before cat miner profile json gives up in one iteration
+ipfs_gc_interval_secs = 300 # How often to request IPFS garbage collection
+initial_pin_concurrency = 32 # Maximum initial concurrent pin tasks 
+# Increases by one for each error or stalling progress
+stalling_pin_task_detection = 120 # How many seconds without progress in a pin task
+# To trigger stalling pin task warning notification
 
 
 [db]

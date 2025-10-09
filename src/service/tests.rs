@@ -82,7 +82,7 @@ pub mod tests {
     #[tokio::test]
     async fn test_update_progress_cid_error_path() {
         let tmp = TempDir::new().unwrap();
-        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap()).unwrap());
+        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap(), 120).unwrap());
         let notifier = Arc::new(MultiNotifier::new());
         let notif_state = Arc::new(Mutex::new(NotifState::default()));
         let active = Arc::new(Mutex::new(HashMap::new()));
@@ -195,7 +195,7 @@ pub mod tests {
     #[tokio::test]
     async fn test_update_progress_cid_stalled_branch() {
         let tmp = TempDir::new().unwrap();
-        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap()).unwrap());
+        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap(), 120).unwrap());
         let notifier = Arc::new(MultiNotifier::new());
         let notif_state = Arc::new(Mutex::new(NotifState::default()));
         let active = Arc::new(Mutex::new(HashMap::new()));
@@ -410,7 +410,7 @@ pub mod tests {
     #[tokio::test]
     async fn test_update_progress_cid_raw_branch() {
         let tmp = TempDir::new().unwrap();
-        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap()).unwrap());
+        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap(), 120).unwrap());
         let notifier = Arc::new(MultiNotifier::new());
         let notif_state = Arc::new(Mutex::new(NotifState::default()));
         let active = Arc::new(Mutex::new(HashMap::new()));
@@ -537,7 +537,7 @@ pub mod tests {
 
         // temp DB
         let tmp = TempDir::new().unwrap();
-        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap()).unwrap());
+        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap(), 120).unwrap());
 
         // config with required substrate values
         let cfg = Settings {
@@ -575,7 +575,7 @@ pub mod tests {
 
         // pool already has cid
         let tmp = TempDir::new().unwrap();
-        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap()).unwrap());
+        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap(), 120).unwrap());
         pool.set_profile(Some(&cid)).unwrap();
 
         // use dummy chain that returns the same cid
@@ -686,7 +686,7 @@ pub mod tests {
     #[tokio::test]
     async fn test_update_progress_cid_blocks_done_marks_complete() {
         let tmp = TempDir::new().unwrap();
-        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap()).unwrap());
+        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap(), 120).unwrap());
         let notifier = Arc::new(MultiNotifier::new());
         let notif_state = Arc::new(Mutex::new(NotifState::default()));
         let active_pins = Arc::new(Mutex::new(HashMap::new()));
@@ -747,7 +747,7 @@ pub mod tests {
     #[tokio::test]
     async fn test_update_progress_cid_done_releases_permit() {
         let tmp = TempDir::new().unwrap();
-        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap()).unwrap());
+        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap(), 120).unwrap());
         let notifier = Arc::new(MultiNotifier::new());
         let notif_state = Arc::new(Mutex::new(NotifState::default()));
         let active = Arc::new(Mutex::new(HashMap::new()));
@@ -929,7 +929,7 @@ pub mod tests {
     #[tokio::test]
     async fn test_run_health_check_failure_and_recovery() {
         let tmp = TempDir::new().unwrap();
-        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap()).unwrap());
+        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap(), 120).unwrap());
         let notifier = Arc::new(MultiNotifier::new());
 
         let mut cfg = Settings::default();
@@ -1011,7 +1011,7 @@ pub mod tests {
     #[tokio::test]
     async fn test_run_with_monitoring_port() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let pool = Arc::new(crate::db::CidPool::init(tmp.path().to_str().unwrap()).unwrap());
+        let pool = Arc::new(crate::db::CidPool::init(tmp.path().to_str().unwrap(), 120).unwrap());
         let notifier = Arc::new(MultiNotifier::new());
 
         let mut cfg = Settings::default();
@@ -1030,7 +1030,7 @@ pub mod tests {
     async fn test_update_profile_cid_error() {
         let mut chain = Chain::dummy(true, Some(Err(anyhow::anyhow!("boom"))));
         let tmp = tempfile::TempDir::new().unwrap();
-        let pool = Arc::new(crate::db::CidPool::init(tmp.path().to_str().unwrap()).unwrap());
+        let pool = Arc::new(crate::db::CidPool::init(tmp.path().to_str().unwrap(), 120).unwrap());
 
         let cfg = Settings::default();
         let res = update_profile_cid(&cfg, &pool, &mut chain).await;

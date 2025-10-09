@@ -10,8 +10,9 @@ const DEFAULT_POLL_INTERVAL_SECS: u64 = 12;
 const DEFAULT_RECONCILE_INTERVAL_SECS: u64 = 12;
 const HEALTH_CHECK_INTERVAL_SECS: u64 = 30;
 const IPFS_CAT_TIMEOUT_SECS: u64 = 30;
-const IPFS_GC_INTERVAL_SECS: u64 = 3600;
+const IPFS_GC_INTERVAL_SECS: u64 = 300;
 const DEFAULT_CONCURRENCY: usize = 32;
+const DEFAULT_STALLING_DETECTION_SECS: u64 = 120;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ServiceCfg {
@@ -20,6 +21,7 @@ pub struct ServiceCfg {
     pub health_check_interval_secs: u64,
     pub ipfs_cat_timeout_secs: u64,
     pub ipfs_gc_interval_secs: u64,
+    pub stalling_pin_task_detection: u64,
     pub initial_pin_concurrency: usize,
 }
 
@@ -81,6 +83,7 @@ pub async fn load(path: Option<&str>, with_env: bool, with_conf: bool) -> Result
             ipfs_cat_timeout_secs: IPFS_CAT_TIMEOUT_SECS,
             ipfs_gc_interval_secs: IPFS_GC_INTERVAL_SECS,
             initial_pin_concurrency: DEFAULT_CONCURRENCY,
+            stalling_pin_task_detection: DEFAULT_STALLING_DETECTION_SECS,
         },
         db: DbCfg {
             path: "./miner_db_pool".into(),
