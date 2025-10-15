@@ -1,4 +1,4 @@
-[`Coverage Report`](https://jubilant-adventure-pgevypq.pages.github.io/)
+[`Coverage Report`](https://thenervelab.github.io/rust-miner-ipfs-service/)
 
 
 A generated rust service that mirrors the functionality of `thenervelab/miner-ipfs-service`:
