@@ -128,6 +128,7 @@ pub fn disk_usage() -> (Vec<(u64, u64)>, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use tempfile::tempdir;
 
     struct MockDiskProvider {

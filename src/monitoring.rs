@@ -317,8 +317,19 @@ mod tests {
         assert!(status.profile.contains("profile error"));
     }
 
+    #[serial_test::serial]
     #[tokio::test]
     async fn status_disk_usage_ok() {
+        use std::env;
+
+        // Point IPFS_PATH at a real, existing directory so disk_usage() can resolve the mount.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("ipfs-repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        unsafe {
+            env::set_var("IPFS_PATH", &repo);
+        }
+
         let ipfs = Arc::new(DummyIpfs::default());
         let notifier = Arc::new(MultiNotifier::new());
         let mut chain = Chain::dummy(true, Some(Ok(Some("profile".into()))));
@@ -326,8 +337,20 @@ mod tests {
         let response = status_handler(&ipfs, &mut chain, &notifier, None, None, None, None).await;
         let body = serde_json::to_string(&response.0).unwrap();
 
-        assert!(body.contains("\"disk\":\"OK\""));
-        assert!(body.contains("\"disk_info\":["));
+        // With an IPFS_PATH set, disk_usage() should find exactly one disk, so status is "OK".
+        assert!(
+            body.contains("\"disk\":\"OK\""),
+            "status body did not report disk OK on this host:\n{body}"
+        );
+        assert!(
+            body.contains("\"disk_info\":["),
+            "expected disk_info array in status body:\n{body}"
+        );
+
+        // Clean up for other tests
+        unsafe {
+            env::remove_var("IPFS_PATH");
+        }
     }
 
     #[tokio::test]
