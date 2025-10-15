@@ -19,16 +19,20 @@ pub struct DummyIpfs {
     pub pin_verify_result: Result<Vec<PinState>>,
     pub pin_ls_all_result: Result<HashSet<String>>,
     pub health_ok: bool,
+
+    // NEW: control success/failure of connect_bootstrap()
+    pub connect_bootstrap_result: Result<()>,
 }
 
 impl Default for DummyIpfs {
     fn default() -> Self {
         Self {
-            cat_result: Ok(serde_json::json!({})), // empty JSON
+            cat_result: Ok(serde_json::json!({})),
             pin_rm_result: Ok(()),
             pin_verify_result: Ok(vec![]),
             pin_ls_all_result: Ok(HashSet::new()),
             health_ok: true,
+            connect_bootstrap_result: Ok(()), // default to success
         }
     }
 }
@@ -40,11 +44,7 @@ impl IpfsClient for DummyIpfs {
         T: serde::de::DeserializeOwned + Send,
     {
         match &self.cat_result {
-            Ok(val) => {
-                // clone the JSON, which *is* Clone
-                let v = val.clone();
-                Ok(serde_json::from_value(v)?)
-            }
+            Ok(val) => Ok(serde_json::from_value(val.clone())?),
             Err(e) => Err(anyhow::anyhow!(e.to_string())),
         }
     }
@@ -58,7 +58,7 @@ impl IpfsClient for DummyIpfs {
 
     async fn pin_verify(&self) -> Result<Vec<PinState>> {
         match &self.pin_verify_result {
-            Ok(v) => Ok(v.clone()), // Vec is Clone
+            Ok(v) => Ok(v.clone()),
             Err(e) => Err(anyhow::anyhow!(e.to_string())),
         }
     }
@@ -82,6 +82,13 @@ impl IpfsClient for DummyIpfs {
     async fn pin_ls_all(&self) -> Result<HashSet<String>> {
         match &self.pin_ls_all_result {
             Ok(v) => Ok(v.clone()),
+            Err(e) => Err(anyhow::anyhow!(e.to_string())),
+        }
+    }
+
+    async fn connect_bootstrap(&self, _addr: &str) -> Result<()> {
+        match &self.connect_bootstrap_result {
+            Ok(_) => Ok(()),
             Err(e) => Err(anyhow::anyhow!(e.to_string())),
         }
     }

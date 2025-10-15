@@ -28,7 +28,6 @@ use crate::{
 //                      //                      //                                  //                      //                      //
 
 //                      //                      //          //          //          //                      //                      //
-
 #[cfg(any(test))]
 pub mod tests {
     use super::*;
@@ -245,6 +244,7 @@ pub mod tests {
             pin_verify_result: Ok(vec![]),
             pin_ls_all_result: Ok(HashSet::new()),
             health_ok: true,
+            ..Default::default()
         });
         let notifier = Arc::new(MultiNotifier::new());
         let notif_state = Arc::new(Mutex::new(NotifState::default()));
@@ -278,6 +278,7 @@ pub mod tests {
             pin_rm_result: Ok(()),
             pin_verify_result: Ok(vec![]),
             health_ok: true,
+            ..Default::default()
         });
         let notifier = Arc::new(MultiNotifier::new());
         let notif_state = Arc::new(Mutex::new(NotifState::default()));
@@ -362,6 +363,7 @@ pub mod tests {
             pin_verify_result: Ok(vec![]),
             pin_ls_all_result: Ok(HashSet::new()),
             health_ok: true,
+            ..Default::default()
         });
 
         let ipfs_high = Arc::new(DummyIpfs {
@@ -370,6 +372,7 @@ pub mod tests {
             pin_verify_result: Ok(vec![]),
             pin_ls_all_result: Ok(HashSet::new()),
             health_ok: true,
+            ..Default::default()
         });
 
         let notifier = Arc::new(MultiNotifier::new());
@@ -529,6 +532,7 @@ pub mod tests {
             res
         );
     }
+
     #[tokio::test]
     async fn test_update_profile_cid_changes() {
         // Chain will always return Some("newcid")
@@ -718,6 +722,7 @@ pub mod tests {
             }]),
             pin_ls_all_result: Ok(HashSet::from(["cidX".to_string()])),
             health_ok: true,
+            ..Default::default()
         });
 
         let res = update_progress_cid(

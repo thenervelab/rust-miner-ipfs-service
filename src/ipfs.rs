@@ -29,6 +29,7 @@ pub trait IpfsClient: Send + Sync {
     #[allow(dead_code)]
     async fn check_health(&self) -> Result<()>;
     async fn pin_ls_all(&self) -> Result<HashSet<String>>;
+    async fn connect_bootstrap(&self, addr: &str) -> Result<()>;
 }
 
 impl Client {
@@ -228,6 +229,17 @@ impl Client {
         self.http.post(url).send().await?.error_for_status()?;
         Ok(())
     }
+
+    pub async fn connect_bootstrap(&self, addr: &str) -> Result<()> {
+        let url = self.base.join("/api/v0/swarm/connect")?;
+        self.http
+            .post(url)
+            .query(&[("arg", addr)])
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -258,6 +270,10 @@ impl IpfsClient for Client {
 
     async fn check_health(&self) -> Result<()> {
         self.check_health().await
+    }
+
+    async fn connect_bootstrap(&self, addr: &str) -> Result<()> {
+        self.connect_bootstrap(addr).await
     }
 }
 
@@ -480,5 +496,42 @@ mod tests {
         let client = Client::new(server.base_url());
         let obj: Dummy = IpfsClient::cat(&client, "cidx").await.unwrap();
         assert_eq!(obj.name, "bob");
+    }
+
+    #[tokio::test]
+    async fn connect_bootstrap_ok() {
+        let server = MockServer::start();
+
+        // Example bootstrap multiaddr (as provided).
+        let addr =
+            "/ip4/104.131.131.82/tcp/4001/ipfs/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ";
+
+        // Expect POST /api/v0/swarm/connect?arg=<addr>
+        server.mock(|when, then| {
+            when.path("/api/v0/swarm/connect").query_param("arg", addr);
+            then.status(200)
+                .body(r#"{"Strings":["connect <peer> success"]}"#);
+        });
+
+        let client = Client::new(server.base_url());
+        let res = client.connect_bootstrap(addr).await;
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn connect_bootstrap_fails_on_non_200() {
+        let server = MockServer::start();
+
+        // Using /p2p/ variant to ensure we pass through transparently.
+        let addr = "/ip4/203.0.113.5/tcp/4001/p2p/12D3KooWAbCdEfGh";
+
+        server.mock(|when, then| {
+            when.path("/api/v0/swarm/connect").query_param("arg", addr);
+            then.status(500).body("dial error");
+        });
+
+        let client = Client::new(server.base_url());
+        let res = client.connect_bootstrap(addr).await;
+        assert!(res.is_err());
     }
 }

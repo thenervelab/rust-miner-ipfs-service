@@ -33,6 +33,7 @@ pub struct DbCfg {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct IpfsCfg {
     pub api_url: String,
+    pub bootstrap: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -97,6 +98,7 @@ pub async fn load(path: Option<&str>, with_env: bool, with_conf: bool) -> Result
         },
         ipfs: IpfsCfg {
             api_url: "http://127.0.0.1:5001".into(),
+            bootstrap: vec![],
         },
         telegram: TelegramCfg {
             bot_token: None,

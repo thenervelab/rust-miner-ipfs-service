@@ -1,5 +1,5 @@
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use sysinfo::{Disks, System};
 
 /// Trait to abstract over real vs mocked disk providers.

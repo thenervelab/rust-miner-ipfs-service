@@ -112,6 +112,21 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
 
     let ipfs = Arc::new(Ipfs::new(cfg.ipfs.api_url.clone()));
 
+    tracing::info!("Connecting to IPFS bootstrap nodes");
+
+    for addr in &cfg.ipfs.bootstrap {
+        match async_std::future::timeout(
+            Duration::from_secs(10),
+            IpfsClient::connect_bootstrap(&*ipfs, addr),
+        )
+        .await
+        {
+            Ok(Ok(())) => tracing::info!("Connected IPFS node to bootstrap peer: {addr}"),
+            Ok(Err(e)) => tracing::warn!("Failed to connect IPFS node to bootstrap {addr}: {e}"),
+            Err(_) => tracing::warn!("Timed out connecting IPFS node to bootstrap {addr}"),
+        }
+    }
+
     tracing::info!("Connecting to Substrate node");
 
     let mut chain_uninited: Option<Chain> = None;

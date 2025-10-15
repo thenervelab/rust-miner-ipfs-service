@@ -15,6 +15,10 @@ path = "./miner_db_pool"
 [ipfs]
 # Kubo API endpoint
 api_url = "http://127.0.0.1:5001"
+bootstrap = [
+  "/ip4/104.131.131.82/tcp/4001/ipfs/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
+  "/ip4/203.0.113.5/tcp/4001/p2p/12D3KooWAbCdEfGh"
+]
 
 [substrate]
 # WebSocket endpoint for Substrate node
