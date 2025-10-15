@@ -608,25 +608,28 @@ where
         }
     };
 
-    let (disks, _program_location_disk_usage) = disk_fn();
+    let (disks, ipfs_location_disk_usage) = disk_fn();
 
-    for (i, disk) in disks.iter().enumerate() {
+    for (_i, disk) in disks.iter().enumerate() {
         let available = disk.0 as f64 / disk.1 as f64 * 100.0;
 
         let gb: f64 = disk.1 as f64 / (1024.0 * 1024.0 * 1024.0);
 
-        let diskm = format!("disk_space_disk_{}", i);
+        let diskm = format!("disk_space_for_ipfs");
         let okm = format!(
-            "Disk {} available space left: {:.2}% of {:.2} GB",
-            i, available, gb
+            "Disk used for IPFS storage available space left: {:.2}% of {:.2} GB",
+            available, gb
         );
         let errm = format!(
-            "Disk {} available space left: {:.2}% of {:.2} GB",
-            i, available, gb
+            "Disk used for IPFS storage available space left: {:.2}% of {:.2} GB",
+            available, gb
         );
 
         if available < 50.0 {
-            tracing::warn!("Disk {} available space: {}%", i, available);
+            tracing::warn!(
+                "Available space on disk used for IPFS storage: {}%",
+                available
+            );
 
             notif_state
                 .lock()
@@ -634,7 +637,10 @@ where
                 .notify_change(notifier, diskm, false, &okm, &errm)
                 .await;
         } else {
-            tracing::info!("Disk {} available space: {}%", i, available);
+            tracing::info!(
+                "Available space on disk used for IPFS storage: {}%",
+                available
+            );
             notif_state
                 .lock()
                 .await
@@ -642,6 +648,18 @@ where
                 .await;
         };
     }
+
+    notif_state
+        .lock()
+        .await
+        .notify_change(
+            notifier,
+            format!("cant_find_ipfs_disk"),
+            ipfs_location_disk_usage != 404.0,
+            "Disk containing ipfs storage found",
+            "Disk containing ipfs storage not found",
+        )
+        .await;
 
     tracing::info!("Reconcile finished");
     Ok(())
@@ -776,7 +794,7 @@ where
                                 &notifier,
                                 format!("Completed pin {}", cid_t),
                                 true,
-                                &format!("Pin task completet for {}", cid_t),
+                                &format!("Pin task complete for {}", cid_t),
                                 "unused",
                             )
                             .await;
