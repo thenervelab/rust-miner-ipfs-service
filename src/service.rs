@@ -522,7 +522,10 @@ where
                     Err(_e) => {
                         let pin_set = ipfs.pin_ls_all().await?;
                         if pin_set.contains(&cid) {
-                            tracing::error!("");
+                            tracing::error!(
+                                "Failed to unpin {}, still present in verified pins",
+                                cid
+                            );
                         }
                     }
                 };
