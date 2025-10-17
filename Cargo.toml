@@ -28,6 +28,8 @@ chrono = { version = "0.4", features = ["serde", "clock"] }
 hex = "0.4"
 sysinfo = "0.37"
 parquet = "56"
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.17", default-features = false, features = ["http-listener", "tokio"] }
 
 # API Server
 axum = "0.8"

@@ -46,3 +46,4 @@ to = "alert-recipient@example.com"
 
 [monitoring]
 port = 9090
+metrics_port = 9464

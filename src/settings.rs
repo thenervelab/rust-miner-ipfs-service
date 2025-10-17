@@ -63,6 +63,7 @@ pub struct GmailCfg {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MonitoringConfig {
     pub port: Option<u16>,
+    pub metrics_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -112,7 +113,10 @@ pub async fn load(path: Option<&str>, with_env: bool, with_conf: bool) -> Result
             from: None,
             to: None,
         },
-        monitoring: MonitoringConfig { port: Some(9090) },
+        monitoring: MonitoringConfig {
+            port: Some(9090),
+            metrics_port: Some(9464),
+        },
     };
 
     let mut fig = Figment::from(Serialized::defaults(defaults));

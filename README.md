@@ -76,6 +76,10 @@ app_password = "your apps pass word"
 from = "your@gmail.com"
 to = "alert-recipient@example.com"
 
+[monitoring]
+port = 9090
+metrics_port = 9464
+
 ```
 
 

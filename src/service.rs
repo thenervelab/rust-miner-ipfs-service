@@ -23,6 +23,9 @@ use crate::{
     substrate::Chain,
 };
 
+use metrics::{Unit, describe_counter, describe_gauge, describe_histogram};
+use metrics_exporter_prometheus::PrometheusBuilder;
+
 #[derive(Default)]
 pub struct NotifState {
     last_status: Arc<Mutex<HashMap<String, bool>>>, // true = OK, false = error
@@ -105,6 +108,35 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
         })
         .expect("ctrlc");
     }
+
+    if let Some(port) = cfg.monitoring.metrics_port.or(Some(9464)) {
+        PrometheusBuilder::new()
+            .with_http_listener(([0, 0, 0, 0], port))
+            // you can also .add_global_label("service", "rust-miner-ipfs-service")
+            .install() // sets global recorder + starts the HTTP listener
+            .context("install prometheus exporter")?;
+        tracing::info!("Prometheus metrics listening on 0.0.0.0:{port} (path: /metrics)");
+    }
+
+    describe_counter!("errors_total", Unit::Count, "Error events.");
+    describe_counter!(
+        "reconciles_total",
+        Unit::Count,
+        "Total reconcile loops run."
+    );
+    describe_counter!("ipfs_gc_total", Unit::Count, "Number of IPFS GC runs.");
+    describe_gauge!("active_pins", Unit::Count, "Pin tasks currently running.");
+    describe_gauge!("stalled_pins", Unit::Count, "Pins considered stalled.");
+    describe_gauge!(
+        "ipfs_disk_available_percent",
+        Unit::Percent,
+        "Available disk % for IPFS."
+    );
+    describe_histogram!(
+        "reconcile_duration_seconds",
+        Unit::Seconds,
+        "Reconcile loop duration."
+    );
 
     let notif_state = Arc::new(Mutex::new(NotifState::default()));
 
@@ -270,8 +302,9 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                     }
                     _ = async {
                         if let Err(e) = ipfs.check_health().await {
+                            metrics::counter!("errors_total", "component" => "ipfs", "kind" => "health").increment(1);
                             tracing::error!("IPFS health check failed: {:?}", e);
-                             notif_state.lock().await.notify_change(
+                            notif_state.lock().await.notify_change(
                                 &notifier,
                                 "ipfs".to_string(),
                                 false,
@@ -279,7 +312,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                                 &format!("IPFS node connectivity check failed: {}", e),
                             ).await;
                         } else {
-
+                            metrics::counter!("health_checks_total", "component" => "ipfs", "result" => "ok").increment(1);
                             for addr in &cfg.ipfs.bootstrap {
                                 match async_std::future::timeout(
                                     Duration::from_secs(10),
@@ -293,7 +326,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                                 }
                             }
 
-                             notif_state.lock().await.notify_change(
+                            notif_state.lock().await.notify_change(
                                 &notifier,
                                 "ipfs".to_string(),
                                 true,
@@ -303,8 +336,9 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                         }
 
                         if let Err(e) = chain.check_health().await {
+                            metrics::counter!("errors_total", "component" => "substrate", "kind" => "health").increment(1);
                             tracing::error!("Substrate health check failed: {:?}", e);
-                             notif_state.lock().await.notify_change(
+                            notif_state.lock().await.notify_change(
                                 &notifier,
                                 "substrate".to_string(),
                                 false,
@@ -312,7 +346,8 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                                 &format!("Blockchain RPC node connectivity check failed: {}", e),
                             ).await;
                         } else {
-                             notif_state.lock().await.notify_change(
+                            metrics::counter!("health_checks_total", "component" => "ipfs", "result" => "ok").increment(1);
+                            notif_state.lock().await.notify_change(
                                 &notifier,
                                 "substrate".to_string(),
                                 true,
@@ -359,6 +394,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                         break;
                     }
                     _ = async {
+                        let started = std::time::Instant::now();
                         if let Err(e) = reconcile_once(&pool, &ipfs, &notifier, &notif_state,
                                 &active_pins,
                                 &pending_pins,
@@ -366,8 +402,9 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                                 cfg.ipfs.gc_after_unpin,
                                 disk_usage,
                             ).await {
+                            metrics::counter!("errors_total", "component" => "reconcile", "kind" => "reconcile_once").increment(1);
                             tracing::error!(error=?e, "reconcile_failed");
-                             notif_state.lock().await.notify_change(
+                            notif_state.lock().await.notify_change(
                                 &notifier,
                                 "reconcile".to_string(),
                                 false,
@@ -375,7 +412,8 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                                 &format!("Profile reconcile failed: {}", e),
                             ).await;
                         } else {
-                             notif_state.lock().await.notify_change(
+                            metrics::counter!("reconciles_total").increment(1);
+                            notif_state.lock().await.notify_change(
                                 &notifier,
                                 "reconcile".to_string(),
                                 true,
@@ -383,7 +421,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                                 "unused",
                             ).await;
                         }
-
+                        metrics::histogram!("reconcile_duration_seconds").record(started.elapsed().as_secs_f64());
                         if let Err(e) = update_progress_cid(&pool, &ipfs, &notifier, &notif_state, active_pins.clone(),  stalled_pins.clone(), concurrency.clone()).await {
                             tracing::error!(error=?e, "progress update error");
                         }
@@ -398,6 +436,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                     }
                     _ = async {
                         if let Err(e) = ipfs.gc().await {
+                            metrics::counter!("errors_total", "component" => "ipfs", "kind" => "gc").increment(1);
                             tracing::error!(error=?e, "gc_failed");
                             notif_state.lock().await.notify_change(
                                 &notifier,
@@ -407,6 +446,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                                 &format!("IPFS GC failed: {}", e),
                             ).await;
                         } else {
+                            metrics::counter!("ipfs_gc_total").increment(1);
                             notif_state.lock().await.notify_change(
                                 &notifier,
                                 "ipfs_gc".to_string(),
@@ -552,6 +592,8 @@ where
         let notifier = notifier.clone();
         tokio::spawn(async move {
             if let Err(e) = ipfs.gc().await {
+                metrics::counter!("errors_total", "component" => "ipfs", "kind" => "gc")
+                    .increment(1);
                 tracing::error!(error=?e, "gc_failed");
                 notif_state
                     .lock()
@@ -565,6 +607,7 @@ where
                     )
                     .await;
             } else {
+                metrics::counter!("ipfs_gc_total").increment(1);
                 tracing::info!("gc_done");
                 notif_state
                     .lock()
@@ -628,6 +671,7 @@ where
     };
 
     let (disks, ipfs_location_disk_usage) = disk_fn();
+    metrics::gauge!("ipfs_disk_available_percent").set(ipfs_location_disk_usage);
 
     for (_i, disk) in disks.iter().enumerate() {
         let available = disk.0 as f64 / disk.1 as f64 * 100.0;
@@ -778,7 +822,7 @@ where
             match p {
                 PinProgress::Blocks(v) => {
                     tracing::info!("CID {} progress: {} blocks", &cid[0..16], v);
-                    if !stalled_pins.lock().await.contains(cid) {
+                    if stalled_pins.lock().await.contains(cid) {
                         stalled_pins.lock().await.remove(cid);
                         let notifier = notifier.clone();
                         let cid = cid.clone();
@@ -931,6 +975,9 @@ where
             }
         }
     }
+
+    metrics::gauge!("active_pins").set(active.len() as f64);
+    metrics::gauge!("stalled_pins").set(stalled_pins.lock().await.len() as f64);
 
     Ok(())
 }
