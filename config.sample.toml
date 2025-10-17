@@ -17,8 +17,9 @@ path = "./miner_db_pool"
 api_url = "http://127.0.0.1:5001"
 bootstrap = [
   "/ip4/104.131.131.82/tcp/4001/ipfs/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
-  "/ip4/203.0.113.5/tcp/4001/p2p/12D3KooWAbCdEfGh"
+  "/dns4/ipfs-bootnode-1.hippius.network/tcp/4001/p2p/12D3KooWAtWvvmkeA6y7CAGXhRZMGKYJkHkG7LQAcGearpV4QwKG"
 ]
+gc_after_unpin = false # whether to call IPFS garbage collector after CIDs are unpinned
 
 [substrate]
 # WebSocket endpoint for Substrate node

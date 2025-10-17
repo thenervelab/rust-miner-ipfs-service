@@ -279,6 +279,20 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                                 &format!("IPFS node connectivity check failed: {}", e),
                             ).await;
                         } else {
+
+                            for addr in &cfg.ipfs.bootstrap {
+                                match async_std::future::timeout(
+                                    Duration::from_secs(10),
+                                    IpfsClient::connect_bootstrap(&*ipfs, addr),
+                                )
+                                .await
+                                {
+                                    Ok(Ok(())) => tracing::info!("Connected IPFS node to bootstrap peer: {addr}"),
+                                    Ok(Err(e)) => tracing::warn!("Failed to connect IPFS node to bootstrap {addr}: {e}"),
+                                    Err(_) => tracing::warn!("Timed out connecting IPFS node to bootstrap {addr}"),
+                                }
+                            }
+
                              notif_state.lock().await.notify_change(
                                 &notifier,
                                 "ipfs".to_string(),
@@ -349,6 +363,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                                 &active_pins,
                                 &pending_pins,
                                 &concurrency,
+                                cfg.ipfs.gc_after_unpin,
                                 disk_usage,
                             ).await {
                             tracing::error!(error=?e, "reconcile_failed");
@@ -442,6 +457,7 @@ pub async fn reconcile_once<P, C, F>(
     active_pins: &Arc<Mutex<HashMap<String, ActiveTask>>>,
     pending_pins: &PinSet,
     concurrency: &Arc<Semaphore>,
+    gc_after_unpin: bool,
     disk_fn: F,
 ) -> Result<()>
 where
@@ -506,78 +522,63 @@ where
     let unpinned = to_unpin.len();
 
     for cid in to_unpin {
-        tracing::error!("Removing pin");
+        tracing::info!("Removing pin");
 
         let ipfs = ipfs.clone();
         let pool = pool.clone();
         let active_pins_map = active_pins.clone();
         tokio::spawn(async move {
             let res: Result<()> = async {
-                match ipfs
-                    .pin_rm(&cid)
-                    .await
-                    .context(format!("Failed to remove pin {}", cid))
-                {
-                    Ok(()) => {}
-                    Err(_e) => {
-                        let pin_set = ipfs.pin_ls_all().await?;
-                        if pin_set.contains(&cid) {
-                            tracing::error!(
-                                "Failed to unpin {}, still present in verified pins",
-                                cid
-                            );
-                        }
-                    }
-                };
                 {
                     let mut active = active_pins_map.lock().await;
                     if let Some(task) = active.remove(&cid) {
                         let _ = task.cancel_tx.send(());
                     }
                 }
-
-                Ok(())
+                ipfs.pin_rm(&cid).await
             }
             .await;
 
             if let Err(e) = &res {
                 let _ = pool.record_failure(Some(&cid), "unpin", &format!("{:?}", e));
-            }
-
-            if let Err(e) = res {
                 tracing::error!(?e, cid, "Unpin failed");
             }
         });
     }
 
-    if unpinned > 0 {
-        if let Err(e) = ipfs.gc().await {
-            tracing::error!(error=?e, "gc_failed");
-            notif_state
-                .lock()
-                .await
-                .notify_change(
-                    &notifier,
-                    "ipfs_gc".to_string(),
-                    false,
-                    "IPFS GC is working again",
-                    &format!("IPFS GC failed: {}", e),
-                )
-                .await;
-        } else {
-            tracing::info!("gc_done");
-            notif_state
-                .lock()
-                .await
-                .notify_change(
-                    &notifier,
-                    "ipfs_gc".to_string(),
-                    true,
-                    "IPFS GC is working again",
-                    "unused",
-                )
-                .await;
-        }
+    if unpinned > 0 && gc_after_unpin {
+        let ipfs = ipfs.clone();
+        let notif_state = notif_state.clone();
+        let notifier = notifier.clone();
+        tokio::spawn(async move {
+            if let Err(e) = ipfs.gc().await {
+                tracing::error!(error=?e, "gc_failed");
+                notif_state
+                    .lock()
+                    .await
+                    .notify_change(
+                        &notifier,
+                        "ipfs_gc".to_string(),
+                        false,
+                        "IPFS GC is working again",
+                        &format!("IPFS GC failed: {}", e),
+                    )
+                    .await;
+            } else {
+                tracing::info!("gc_done");
+                notif_state
+                    .lock()
+                    .await
+                    .notify_change(
+                        &notifier,
+                        "ipfs_gc".to_string(),
+                        true,
+                        "IPFS GC is working again",
+                        "unused",
+                    )
+                    .await;
+            }
+        });
     }
 
     let pin_state_errors: Result<Vec<PinState>> = async {

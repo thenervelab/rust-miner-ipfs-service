@@ -260,6 +260,7 @@ pub mod tests {
             &active,
             &pending,
             &concurrency,
+            false,
             disk_usage,
         )
         .await;
@@ -294,6 +295,7 @@ pub mod tests {
             &active,
             &pending,
             &concurrency,
+            false,
             disk_usage,
         )
         .await;
@@ -337,6 +339,7 @@ pub mod tests {
             &active,
             &pending,
             &concurrency,
+            false,
             disk_usage,
         )
         .await;
@@ -390,6 +393,7 @@ pub mod tests {
             &active,
             &pending,
             &concurrency,
+            false,
             disk_usage,
         )
         .await
@@ -404,6 +408,7 @@ pub mod tests {
             &active,
             &pending,
             &concurrency,
+            false,
             disk_usage,
         )
         .await
@@ -522,6 +527,7 @@ pub mod tests {
             &active,
             &pending,
             &concurrency,
+            false,
             disk_usage,
         )
         .await;
@@ -630,6 +636,7 @@ pub mod tests {
             &active,
             &pending,
             &concurrency,
+            false,
             disk_usage,
         )
         .await;
@@ -665,6 +672,7 @@ pub mod tests {
             &active,
             &pending,
             &concurrency,
+            false,
             disk_usage,
         )
         .await;
@@ -849,6 +857,7 @@ pub mod tests {
             &active,
             &pending,
             &concurrency,
+            false,
             disk_usage,
         )
         .await
@@ -923,6 +932,7 @@ pub mod tests {
             &active,
             &pending,
             &concurrency,
+            false,
             disk_usage,
         )
         .await

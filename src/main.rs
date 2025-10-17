@@ -86,6 +86,7 @@ async fn main() -> Result<()> {
                 &active_pins,
                 &pending_pins,
                 &concurrency,
+                cfg.ipfs.gc_after_unpin,
                 crate::disk::disk_usage,
             )
             .await?
