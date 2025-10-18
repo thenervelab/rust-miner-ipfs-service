@@ -331,6 +331,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                             ).await;
 
                             if !bootstrap_done {
+                                tracing::info!("Connecting to IPFS bootstrap nodes");
                                 for addr in &cfg.ipfs.bootstrap {
                                     match async_std::future::timeout(
                                         Duration::from_secs(10),
