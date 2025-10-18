@@ -144,19 +144,29 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
 
     let ipfs = Arc::new(Ipfs::new(cfg.ipfs.api_url.clone()));
 
-    tracing::info!("Connecting to IPFS bootstrap nodes");
+    let mut bootstrap_done = false;
 
-    for addr in &cfg.ipfs.bootstrap {
-        match async_std::future::timeout(
-            Duration::from_secs(10),
-            IpfsClient::connect_bootstrap(&*ipfs, addr),
-        )
-        .await
-        {
-            Ok(Ok(())) => tracing::info!("Connected IPFS node to bootstrap peer: {addr}"),
-            Ok(Err(e)) => tracing::warn!("Failed to connect IPFS node to bootstrap {addr}: {e}"),
-            Err(_) => tracing::warn!("Timed out connecting IPFS node to bootstrap {addr}"),
+    match ipfs.check_health().await {
+        Ok(()) => {
+            tracing::info!("Connecting to IPFS bootstrap nodes");
+            for addr in &cfg.ipfs.bootstrap {
+                match async_std::future::timeout(
+                    Duration::from_secs(10),
+                    IpfsClient::connect_bootstrap(&*ipfs, addr),
+                )
+                .await
+                {
+                    Ok(Ok(())) => tracing::info!("Connected IPFS node to bootstrap peer: {addr}"),
+                    Ok(Err(e)) => {
+                        tracing::warn!("Failed to connect IPFS node to bootstrap {addr}: {e}")
+                    }
+                    Err(_) => tracing::warn!("Timed out connecting IPFS node to bootstrap {addr}"),
+                }
+            }
+
+            bootstrap_done = true;
         }
+        _ => {}
     }
 
     tracing::info!("Connecting to Substrate node");
@@ -312,20 +322,6 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                                 &format!("IPFS node connectivity check failed: {}", e),
                             ).await;
                         } else {
-                            metrics::counter!("health_checks_total", "component" => "ipfs", "result" => "ok").increment(1);
-                            for addr in &cfg.ipfs.bootstrap {
-                                match async_std::future::timeout(
-                                    Duration::from_secs(10),
-                                    IpfsClient::connect_bootstrap(&*ipfs, addr),
-                                )
-                                .await
-                                {
-                                    Ok(Ok(())) => tracing::info!("Connected IPFS node to bootstrap peer: {addr}"),
-                                    Ok(Err(e)) => tracing::warn!("Failed to connect IPFS node to bootstrap {addr}: {e}"),
-                                    Err(_) => tracing::warn!("Timed out connecting IPFS node to bootstrap {addr}"),
-                                }
-                            }
-
                             notif_state.lock().await.notify_change(
                                 &notifier,
                                 "ipfs".to_string(),
@@ -333,6 +329,23 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                                 "IPFS node is healthy again",
                                 "unused",
                             ).await;
+
+                            if !bootstrap_done {
+                                for addr in &cfg.ipfs.bootstrap {
+                                    match async_std::future::timeout(
+                                        Duration::from_secs(10),
+                                        IpfsClient::connect_bootstrap(&*ipfs, addr),
+                                    )
+                                    .await
+                                    {
+                                        Ok(Ok(())) => tracing::info!("Connected IPFS node to bootstrap peer: {addr}"),
+                                        Ok(Err(e)) => tracing::warn!("Failed to connect IPFS node to bootstrap {addr}: {e}"),
+                                        Err(_) => tracing::warn!("Timed out connecting IPFS node to bootstrap {addr}"),
+                                    }
+                                }
+
+                                bootstrap_done = true;
+                            }
                         }
 
                         if let Err(e) = chain.check_health().await {

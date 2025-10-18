@@ -230,14 +230,94 @@ impl Client {
         Ok(())
     }
 
-    pub async fn connect_bootstrap(&self, addr: &str) -> Result<()> {
-        let url = self.base.join("/api/v0/swarm/connect")?;
-        self.http
-            .post(url)
-            .query(&[("arg", addr)])
-            .send()
-            .await?
-            .error_for_status()?;
+    pub async fn connect_bootstrap(&self, addr: &str) -> anyhow::Result<()> {
+        use tokio::time::{Duration, timeout};
+
+        let per_step_timeout = Duration::from_secs(10);
+        let mut any_ok = false;
+
+        match self.base.join("/api/v0/bootstrap/add") {
+            Ok(url) => {
+                match timeout(
+                    per_step_timeout,
+                    self.http.post(url).query(&[("arg", addr)]).send(),
+                )
+                .await
+                {
+                    Ok(Ok(resp)) => match resp.error_for_status_ref() {
+                        Ok(_) => {
+                            any_ok = true;
+                            tracing::info!(step = "bootstrap_add", %addr, "OK");
+                        }
+                        Err(e) => {
+                            tracing::warn!(step = "bootstrap_add", %addr, status = ?resp.status(), error = ?e, "HTTP error");
+                        }
+                    },
+                    Ok(Err(e)) => {
+                        tracing::warn!(step = "bootstrap_add", %addr, error = ?e, "request error")
+                    }
+                    Err(_) => tracing::warn!(step = "bootstrap_add", %addr, "timed out"),
+                }
+            }
+            Err(e) => tracing::warn!(step = "bootstrap_add", %addr, error = ?e, "bad URL"),
+        }
+
+        match self.base.join("/api/v0/swarm/peering/add") {
+            Ok(url) => {
+                match timeout(
+                    per_step_timeout,
+                    self.http.post(url).query(&[("arg", addr)]).send(),
+                )
+                .await
+                {
+                    Ok(Ok(resp)) => match resp.error_for_status_ref() {
+                        Ok(_) => {
+                            any_ok = true;
+                            tracing::info!(step = "peering_add", %addr, "OK");
+                        }
+                        Err(e) => {
+                            tracing::warn!(step = "peering_add", %addr, status = ?resp.status(), error = ?e, "HTTP error");
+                        }
+                    },
+                    Ok(Err(e)) => {
+                        tracing::warn!(step = "peering_add", %addr, error = ?e, "request error")
+                    }
+                    Err(_) => tracing::warn!(step = "peering_add", %addr, "timed out"),
+                }
+            }
+            Err(e) => tracing::warn!(step = "peering_add", %addr, error = ?e, "bad URL"),
+        }
+
+        match self.base.join("/api/v0/swarm/connect") {
+            Ok(url) => {
+                match timeout(
+                    per_step_timeout,
+                    self.http.post(url).query(&[("arg", addr)]).send(),
+                )
+                .await
+                {
+                    Ok(Ok(resp)) => match resp.error_for_status_ref() {
+                        Ok(_) => {
+                            any_ok = true;
+                            tracing::info!(step = "swarm_connect", %addr, "OK");
+                        }
+                        Err(e) => {
+                            tracing::warn!(step = "swarm_connect", %addr, status = ?resp.status(), error = ?e, "HTTP error");
+                        }
+                    },
+                    Ok(Err(e)) => {
+                        tracing::warn!(step = "swarm_connect", %addr, error = ?e, "request error")
+                    }
+                    Err(_) => tracing::warn!(step = "swarm_connect", %addr, "timed out"),
+                }
+            }
+            Err(e) => tracing::warn!(step = "swarm_connect", %addr, error = ?e, "bad URL"),
+        }
+
+        if !any_ok {
+            tracing::warn!(%addr, "connect_bootstrap: all steps failed for address");
+        }
+
         Ok(())
     }
 }
@@ -519,19 +599,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn connect_bootstrap_fails_on_non_200() {
+    async fn connect_bootstrap_suppresses_non_200_and_returns_ok() {
+        use httpmock::MockServer;
+
         let server = MockServer::start();
 
-        // Using /p2p/ variant to ensure we pass through transparently.
+        // Full multiaddr including /p2p/PeerID
         let addr = "/ip4/203.0.113.5/tcp/4001/p2p/12D3KooWAbCdEfGh";
 
-        server.mock(|when, then| {
+        // Mock all three endpoints the client now calls, all returning non-200.
+        let bootstrap_mock = server.mock(|when, then| {
+            when.path("/api/v0/bootstrap/add").query_param("arg", addr);
+            then.status(500).body("bootstrap add failed");
+        });
+
+        let peering_mock = server.mock(|when, then| {
+            when.path("/api/v0/swarm/peering/add")
+                .query_param("arg", addr);
+            then.status(500).body("peering add failed");
+        });
+
+        let connect_mock = server.mock(|when, then| {
             when.path("/api/v0/swarm/connect").query_param("arg", addr);
             then.status(500).body("dial error");
         });
 
         let client = Client::new(server.base_url());
         let res = client.connect_bootstrap(addr).await;
-        assert!(res.is_err());
+
+        assert!(
+            res.is_ok(),
+            "connect_bootstrap should suppress errors and return Ok"
+        );
+
+        bootstrap_mock.assert();
+        peering_mock.assert();
+        connect_mock.assert();
     }
 }
