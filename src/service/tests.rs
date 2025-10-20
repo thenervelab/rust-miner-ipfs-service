@@ -260,7 +260,6 @@ pub mod tests {
             &active,
             &pending,
             &concurrency,
-            false,
             disk_usage,
         )
         .await;
@@ -295,7 +294,6 @@ pub mod tests {
             &active,
             &pending,
             &concurrency,
-            false,
             disk_usage,
         )
         .await;
@@ -339,7 +337,6 @@ pub mod tests {
             &active,
             &pending,
             &concurrency,
-            false,
             disk_usage,
         )
         .await;
@@ -393,7 +390,6 @@ pub mod tests {
             &active,
             &pending,
             &concurrency,
-            false,
             disk_usage,
         )
         .await
@@ -408,7 +404,6 @@ pub mod tests {
             &active,
             &pending,
             &concurrency,
-            false,
             disk_usage,
         )
         .await
@@ -527,7 +522,6 @@ pub mod tests {
             &active,
             &pending,
             &concurrency,
-            false,
             disk_usage,
         )
         .await;
@@ -636,7 +630,6 @@ pub mod tests {
             &active,
             &pending,
             &concurrency,
-            false,
             disk_usage,
         )
         .await;
@@ -672,7 +665,6 @@ pub mod tests {
             &active,
             &pending,
             &concurrency,
-            false,
             disk_usage,
         )
         .await;
@@ -857,7 +849,6 @@ pub mod tests {
             &active,
             &pending,
             &concurrency,
-            false,
             disk_usage,
         )
         .await
@@ -932,7 +923,6 @@ pub mod tests {
             &active,
             &pending,
             &concurrency,
-            false,
             disk_usage,
         )
         .await
@@ -950,7 +940,6 @@ pub mod tests {
         let mut cfg = Settings::default();
         cfg.service.poll_interval_secs = 1;
         cfg.service.reconcile_interval_secs = 1;
-        cfg.service.ipfs_gc_interval_secs = 1;
         cfg.service.health_check_interval_secs = 1;
 
         // Start run() in background
@@ -1033,7 +1022,6 @@ pub mod tests {
         cfg.monitoring.port = Some(0); // ephemeral port
         cfg.service.poll_interval_secs = 1;
         cfg.service.reconcile_interval_secs = 1;
-        cfg.service.ipfs_gc_interval_secs = 1;
         cfg.service.health_check_interval_secs = 1;
 
         let h = tokio::spawn(run(cfg, pool, notifier));

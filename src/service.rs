@@ -125,7 +125,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
         Unit::Count,
         "Total reconcile loops run."
     );
-    describe_counter!("ipfs_gc_total", Unit::Count, "Number of IPFS GC runs.");
+
     describe_gauge!("active_pins", Unit::Count, "Pin tasks currently running.");
     describe_gauge!("stalled_pins", Unit::Count, "Pins considered stalled.");
     describe_gauge!(
@@ -263,10 +263,6 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
     let mut reconcile = time::interval(Duration::from_secs(cfg.service.reconcile_interval_secs));
     reconcile.set_missed_tick_behavior(MissedTickBehavior::Skip);
     reconcile.tick().await;
-
-    let mut gc = time::interval(Duration::from_secs(cfg.service.ipfs_gc_interval_secs));
-    gc.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    gc.tick().await;
 
     let mut health_check =
         time::interval(Duration::from_secs(cfg.service.health_check_interval_secs));
@@ -418,7 +414,6 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                                 &active_pins,
                                 &pending_pins,
                                 &concurrency,
-                                cfg.ipfs.gc_after_unpin,
                                 disk_usage,
                             ).await {
                             metrics::counter!("errors_total", "component" => "reconcile", "kind" => "reconcile_once").increment(1);
@@ -446,37 +441,6 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                         }
                    } => {}
                 }
-            }
-            _ = gc.tick() => {
-                tokio::select! {
-                    _ = shutdown.notified() => {
-                        tracing::info!("Ipfs gc shutting down during tick");
-                        break;
-                    }
-                    _ = async {
-                        if let Err(e) = ipfs.gc().await {
-                            metrics::counter!("errors_total", "component" => "ipfs", "kind" => "gc").increment(1);
-                            tracing::error!(error=?e, "gc_failed");
-                            notif_state.lock().await.notify_change(
-                                &notifier,
-                                "ipfs_gc".to_string(),
-                                false,
-                                "IPFS GC is working again",
-                                &format!("IPFS GC failed: {}", e),
-                            ).await;
-                        } else {
-                            metrics::counter!("ipfs_gc_total").increment(1);
-                            notif_state.lock().await.notify_change(
-                                &notifier,
-                                "ipfs_gc".to_string(),
-                                true,
-                                "IPFS GC is working again",
-                                "unused",
-                            ).await;
-                        }
-                   } => {}
-                }
-
             }
         }
     }
@@ -516,7 +480,6 @@ pub async fn reconcile_once<P, C, F>(
     active_pins: &Arc<Mutex<HashMap<String, ActiveTask>>>,
     pending_pins: &PinSet,
     concurrency: &Arc<Semaphore>,
-    gc_after_unpin: bool,
     disk_fn: F,
 ) -> Result<()>
 where
@@ -578,8 +541,6 @@ where
 
     let to_unpin = pool.sync_pins(desired)?;
 
-    let unpinned = to_unpin.len();
-
     for cid in to_unpin {
         tracing::info!("Removing pin");
 
@@ -601,44 +562,6 @@ where
             if let Err(e) = &res {
                 let _ = pool.record_failure(Some(&cid), "unpin", &format!("{:?}", e));
                 tracing::error!(?e, cid, "Unpin failed");
-            }
-        });
-    }
-
-    if unpinned > 0 && gc_after_unpin {
-        let ipfs = ipfs.clone();
-        let notif_state = notif_state.clone();
-        let notifier = notifier.clone();
-        tokio::spawn(async move {
-            if let Err(e) = ipfs.gc().await {
-                metrics::counter!("errors_total", "component" => "ipfs", "kind" => "gc")
-                    .increment(1);
-                tracing::error!(error=?e, "gc_failed");
-                notif_state
-                    .lock()
-                    .await
-                    .notify_change(
-                        &notifier,
-                        "ipfs_gc".to_string(),
-                        false,
-                        "IPFS GC is working again",
-                        &format!("IPFS GC failed: {}", e),
-                    )
-                    .await;
-            } else {
-                metrics::counter!("ipfs_gc_total").increment(1);
-                tracing::info!("gc_done");
-                notif_state
-                    .lock()
-                    .await
-                    .notify_change(
-                        &notifier,
-                        "ipfs_gc".to_string(),
-                        true,
-                        "IPFS GC is working again",
-                        "unused",
-                    )
-                    .await;
             }
         });
     }

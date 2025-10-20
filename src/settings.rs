@@ -10,7 +10,6 @@ const DEFAULT_POLL_INTERVAL_SECS: u64 = 12;
 const DEFAULT_RECONCILE_INTERVAL_SECS: u64 = 12;
 const HEALTH_CHECK_INTERVAL_SECS: u64 = 30;
 const IPFS_CAT_TIMEOUT_SECS: u64 = 30;
-const IPFS_GC_INTERVAL_SECS: u64 = 300;
 const DEFAULT_CONCURRENCY: usize = 32;
 const DEFAULT_STALLING_DETECTION_SECS: u64 = 120;
 
@@ -20,7 +19,6 @@ pub struct ServiceCfg {
     pub reconcile_interval_secs: u64,
     pub health_check_interval_secs: u64,
     pub ipfs_cat_timeout_secs: u64,
-    pub ipfs_gc_interval_secs: u64,
     pub stalling_pin_task_detection: u64,
     pub initial_pin_concurrency: usize,
 }
@@ -34,7 +32,6 @@ pub struct DbCfg {
 pub struct IpfsCfg {
     pub api_url: String,
     pub bootstrap: Vec<String>,
-    pub gc_after_unpin: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -84,7 +81,6 @@ pub async fn load(path: Option<&str>, with_env: bool, with_conf: bool) -> Result
             reconcile_interval_secs: DEFAULT_RECONCILE_INTERVAL_SECS,
             health_check_interval_secs: HEALTH_CHECK_INTERVAL_SECS,
             ipfs_cat_timeout_secs: IPFS_CAT_TIMEOUT_SECS,
-            ipfs_gc_interval_secs: IPFS_GC_INTERVAL_SECS,
             initial_pin_concurrency: DEFAULT_CONCURRENCY,
             stalling_pin_task_detection: DEFAULT_STALLING_DETECTION_SECS,
         },
@@ -101,7 +97,6 @@ pub async fn load(path: Option<&str>, with_env: bool, with_conf: bool) -> Result
         ipfs: IpfsCfg {
             api_url: "http://127.0.0.1:5001".into(),
             bootstrap: vec![],
-            gc_after_unpin: false,
         },
         telegram: TelegramCfg {
             bot_token: None,

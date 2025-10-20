@@ -7,7 +7,6 @@ A generated rust service that mirrors the functionality of `thenervelab/miner-ip
 - Fetch current **miner profile CID** from a Substrate-based chain (configurable pallet/storage).
 - Download **profile JSON** from IPFS (via Kubo HTTP API) and resolve list of CIDs to **pin**.
 - **Pin** new CIDs, **unpin** removed ones, track state in **ParityDB**.
-- Periodic **IPFS GC**.
 - Rich **observability** (structured logs via tracing), **CLI**, **monitoring api**, **notifications** and **graceful shutdown**.
 
 
@@ -36,7 +35,6 @@ poll_interval_secs = 12 # How often to poll the chain for miner profile json CID
 reconcile_interval_secs = 12 # How often check progress on ongoing pin tasks
 health_check_interval_secs = 30 # How often to check substrate / ipfs node connection
 ipfs_cat_timeout_secs = 30 # How long before cat miner profile json gives up in one iteration
-ipfs_gc_interval_secs = 300 # How often to request IPFS garbage collection
 initial_pin_concurrency = 32 # Maximum initial concurrent pin tasks 
 # Increases by one for each error or stalling progress
 stalling_pin_task_detection = 120 # How many seconds without progress in a pin task
@@ -54,7 +52,6 @@ bootstrap = [
   "/ip4/104.131.131.82/tcp/4001/ipfs/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
   "/dns4/ipfs-bootnode-1.hippius.network/tcp/4001/p2p/12D3KooWAtWvvmkeA6y7CAGXhRZMGKYJkHkG7LQAcGearpV4QwKG"
 ]
-gc_after_unpin = false # whether to call IPFS garbage collector after CIDs are unpinned
 
 [substrate]
 # WebSocket endpoint for Substrate node
