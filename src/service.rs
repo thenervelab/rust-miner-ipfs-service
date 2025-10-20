@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use tokio::{
     sync::{Mutex, Notify, OwnedSemaphorePermit, Semaphore, oneshot},
     time,
+    time::MissedTickBehavior,
     time::sleep,
 };
 
@@ -256,16 +257,20 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
     tracing::info!("Commencing node operation");
 
     let mut poll = time::interval(Duration::from_secs(cfg.service.poll_interval_secs));
+    poll.set_missed_tick_behavior(MissedTickBehavior::Skip);
     poll.tick().await;
 
     let mut reconcile = time::interval(Duration::from_secs(cfg.service.reconcile_interval_secs));
+    reconcile.set_missed_tick_behavior(MissedTickBehavior::Skip);
     reconcile.tick().await;
 
     let mut gc = time::interval(Duration::from_secs(cfg.service.ipfs_gc_interval_secs));
+    gc.set_missed_tick_behavior(MissedTickBehavior::Skip);
     gc.tick().await;
 
     let mut health_check =
         time::interval(Duration::from_secs(cfg.service.health_check_interval_secs));
+    health_check.set_missed_tick_behavior(MissedTickBehavior::Skip);
     health_check.tick().await;
 
     // reset last_progress_at values to current time so that node downtime does not trigger stalled progress detection
