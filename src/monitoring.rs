@@ -1,11 +1,17 @@
 use anyhow::Result;
 use axum::{Json, Router, routing::get};
 use serde::{Deserialize, Serialize};
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+};
 use tokio::{net::TcpListener, sync::Notify};
 
+use sysinfo::Disks;
+
 use crate::{
-    disk::disk_usage, ipfs::IpfsClient, model::PinState, notifier::MultiNotifier, substrate::Chain,
+    disk::disk_usage_with_disks, ipfs::IpfsClient, model::PinState, notifier::MultiNotifier,
+    substrate::Chain,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -34,6 +40,7 @@ pub async fn status_handler<C>(
     storage_item: Option<String>,
     miner_account_hex: Option<String>,
     raw_storage_key_hex: Option<String>,
+    disks: &Arc<Mutex<Disks>>,
 ) -> Json<HealthStatus>
 where
     C: IpfsClient + 'static,
@@ -51,9 +58,13 @@ where
     };
 
     // --- Disk usage check ---
-    let (disks, _) = disk_usage();
-    let (disk_status, disk_info) = if !disks.is_empty() {
-        let infos = disks
+    let (disks_vec, _) = {
+        let mut guard = disks.lock().expect("lock Disks");
+        disk_usage_with_disks(&mut *guard)
+    };
+
+    let (disk_status, disk_info) = if !disks_vec.is_empty() {
+        let infos = disks_vec
             .iter()
             .map(|(avail, total)| DiskInfo {
                 available_percent: *avail as f64 / *total as f64 * 100.0,
@@ -136,6 +147,7 @@ pub struct HealthServerConfig<C> {
     pub storage_item: Option<String>,
     pub miner_account_hex: Option<String>,
     pub raw_storage_key_hex: Option<String>,
+    pub disks: Arc<Mutex<Disks>>,
 }
 
 /// HTTP server that just wraps the handler
@@ -155,6 +167,7 @@ where
         storage_item,
         miner_account_hex,
         raw_storage_key_hex,
+        disks,
     } = cfg;
 
     let app = Router::new().route(
@@ -167,6 +180,7 @@ where
             let item = storage_item.clone();
             let miner_hex = miner_account_hex.clone();
             let raw_key = raw_storage_key_hex.clone();
+            let disks = disks.clone();
 
             move || {
                 let ipfs = ipfs.clone();
@@ -176,10 +190,11 @@ where
                 let item = item.clone();
                 let miner_hex = miner_hex.clone();
                 let raw_key = raw_key.clone();
+                let disks = disks.clone();
 
                 async move {
                     status_handler(
-                        &ipfs, &mut chain, &notifier, pallet, item, miner_hex, raw_key,
+                        &ipfs, &mut chain, &notifier, pallet, item, miner_hex, raw_key, &disks,
                     )
                     .await
                 }
@@ -198,6 +213,16 @@ where
     Ok(())
 }
 
+//          //          //          //          //          //          //          //          //          //          //          //
+
+//                      //                      //                      //                                  //                      //
+
+//                      //                      //          //          //          //                      //                      //
+
+//                      //                      //                                  //                      //                      //
+
+//                      //                      //          //          //          //                      //                      //
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,8 +233,10 @@ mod tests {
         let ipfs = Arc::new(DummyIpfs::default());
         let notifier = Arc::new(MultiNotifier::new());
         let mut chain = Chain::dummy(true, Some(Ok(Some("profile".into()))));
+        let disks = Arc::new(Mutex::new(Disks::new_with_refreshed_list()));
 
-        let response = status_handler(&ipfs, &mut chain, &notifier, None, None, None, None).await;
+        let response =
+            status_handler(&ipfs, &mut chain, &notifier, None, None, None, None, &disks).await;
 
         let body = serde_json::to_string(&response.0).unwrap();
         assert!(body.contains("\"ipfs\""));
@@ -224,8 +251,10 @@ mod tests {
 
         let notifier = Arc::new(MultiNotifier::new());
         let mut chain = Chain::dummy(true, Some(Ok(Some("profile".into()))));
+        let disks = Arc::new(Mutex::new(Disks::new_with_refreshed_list()));
 
-        let response = status_handler(&ipfs, &mut chain, &notifier, None, None, None, None).await;
+        let response =
+            status_handler(&ipfs, &mut chain, &notifier, None, None, None, None, &disks).await;
 
         let body = serde_json::to_string(&response.0).unwrap();
         assert!(body.contains("Error: ipfs down"));
@@ -236,8 +265,10 @@ mod tests {
         let ipfs = Arc::new(DummyIpfs::default());
         let notifier = Arc::new(MultiNotifier::new());
         let mut chain = Chain::dummy(false, Some(Ok(Some("profile".into()))));
+        let disks = Arc::new(Mutex::new(Disks::new_with_refreshed_list()));
 
-        let response = status_handler(&ipfs, &mut chain, &notifier, None, None, None, None).await;
+        let response =
+            status_handler(&ipfs, &mut chain, &notifier, None, None, None, None, &disks).await;
         let body = serde_json::to_string(&response.0).unwrap();
         assert!(body.contains("Error: chain down"));
     }
@@ -249,8 +280,10 @@ mod tests {
         let ipfs = Arc::new(dummy);
         let notifier = Arc::new(MultiNotifier::new());
         let mut chain = Chain::dummy(true, Some(Ok(Some("profile".into()))));
+        let disks = Arc::new(Mutex::new(Disks::new_with_refreshed_list()));
 
-        let response = status_handler(&ipfs, &mut chain, &notifier, None, None, None, None).await;
+        let response =
+            status_handler(&ipfs, &mut chain, &notifier, None, None, None, None, &disks).await;
         let body = serde_json::to_string(&response.0).unwrap();
         assert!(body.contains("Internal error:"));
     }
@@ -267,8 +300,10 @@ mod tests {
         let ipfs = Arc::new(dummy);
         let notifier = Arc::new(MultiNotifier::new());
         let mut chain = Chain::dummy(true, Some(Ok(Some("profile".into()))));
+        let disks = Arc::new(Mutex::new(Disks::new_with_refreshed_list()));
 
-        let response = status_handler(&ipfs, &mut chain, &notifier, None, None, None, None).await;
+        let response =
+            status_handler(&ipfs, &mut chain, &notifier, None, None, None, None, &disks).await;
         let body = serde_json::to_string(&response.0).unwrap();
         assert!(body.contains("disk full"));
     }
@@ -278,6 +313,7 @@ mod tests {
         let ipfs = Arc::new(DummyIpfs::default());
         let notifier = Arc::new(MultiNotifier::new());
         let mut chain = Chain::dummy(true, Some(Ok(None)));
+        let disks = Arc::new(Mutex::new(Disks::new_with_refreshed_list()));
 
         let response = status_handler(
             &ipfs,
@@ -287,6 +323,7 @@ mod tests {
             Some("dummy_item".into()),
             Some("deadbeef".into()),
             None,
+            &disks,
         )
         .await;
         let body = serde_json::to_string(&response.0).unwrap();
@@ -300,6 +337,7 @@ mod tests {
         let ipfs = Arc::new(DummyIpfs::default());
         let notifier = Arc::new(MultiNotifier::new());
         let mut chain = Chain::dummy(true, Some(Err(anyhow::anyhow!("profile error"))));
+        let disks = Arc::new(Mutex::new(Disks::new_with_refreshed_list()));
 
         let response = status_handler(
             &ipfs,
@@ -309,6 +347,7 @@ mod tests {
             Some("dummy_item".into()),
             Some("deadbeef".into()),
             None,
+            &disks,
         )
         .await;
         let body = serde_json::to_string(&response.0).unwrap();
@@ -322,7 +361,7 @@ mod tests {
     async fn status_disk_usage_ok() {
         use std::env;
 
-        // Point IPFS_PATH at a real, existing directory so disk_usage() can resolve the mount.
+        // Point IPFS_PATH at a real, existing directory so disk_usage can resolve the mount.
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("ipfs-repo");
         std::fs::create_dir_all(&repo).unwrap();
@@ -333,11 +372,13 @@ mod tests {
         let ipfs = Arc::new(DummyIpfs::default());
         let notifier = Arc::new(MultiNotifier::new());
         let mut chain = Chain::dummy(true, Some(Ok(Some("profile".into()))));
+        let disks = Arc::new(Mutex::new(Disks::new_with_refreshed_list()));
 
-        let response = status_handler(&ipfs, &mut chain, &notifier, None, None, None, None).await;
+        let response =
+            status_handler(&ipfs, &mut chain, &notifier, None, None, None, None, &disks).await;
         let body = serde_json::to_string(&response.0).unwrap();
 
-        // With an IPFS_PATH set, disk_usage() should find exactly one disk, so status is "OK".
+        // With an IPFS_PATH set, we should find exactly one disk, so status is "OK".
         assert!(
             body.contains("\"disk\":\"OK\""),
             "status body did not report disk OK on this host:\n{body}"
@@ -362,33 +403,41 @@ mod tests {
         let notifier = Arc::new(MultiNotifier::new());
         let chain = Chain::dummy(true, Some(Ok(Some("profile".into()))));
         let shutdown = Arc::new(Notify::new());
+        let disks = Arc::new(Mutex::new(Disks::new_with_refreshed_list()));
 
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let shutdown_clone = shutdown.clone();
 
+        // Build a tiny app inline (mirrors run_health_server route)
+        let app = Router::new().route(
+            "/status",
+            get({
+                let ipfs = ipfs.clone();
+                let chain = chain.clone();
+                let notifier = notifier.clone();
+                let disks = disks.clone();
+                move || {
+                    let ipfs = ipfs.clone();
+                    let mut chain = chain.clone();
+                    let notifier = notifier.clone();
+                    let disks = disks.clone();
+                    async move {
+                        status_handler(&ipfs, &mut chain, &notifier, None, None, None, None, &disks)
+                            .await
+                    }
+                }
+            }),
+        );
+
         tokio::spawn(async move {
-            axum::serve(
-                listener,
-                Router::new().route(
-                    "/status",
-                    get({
-                        let ipfs = ipfs.clone();
-                        let mut chain = chain.clone();
-                        let notifier = notifier.clone();
-                        move || async move {
-                            status_handler(&ipfs, &mut chain, &notifier, None, None, None, None)
-                                .await
-                        }
-                    }),
-                ),
-            )
-            .with_graceful_shutdown(async move {
-                shutdown_clone.notified().await;
-            })
-            .await
-            .unwrap();
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async move {
+                    shutdown_clone.notified().await;
+                })
+                .await
+                .unwrap();
         });
 
         sleep(Duration::from_millis(100)).await;

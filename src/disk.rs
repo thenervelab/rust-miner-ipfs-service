@@ -1,6 +1,6 @@
 use std::env;
 use std::path::PathBuf;
-use sysinfo::{Disks, System};
+use sysinfo::Disks;
 
 /// Trait to abstract over real vs mocked disk providers.
 pub trait DiskProvider {
@@ -8,24 +8,24 @@ pub trait DiskProvider {
     fn disks(&self) -> Vec<(u64, u64, PathBuf)>;
 }
 
-/// Real provider that uses `sysinfo`.
-pub struct SysDiskProvider {
-    #[allow(dead_code)]
-    sys: System,
-    disks: Disks,
+/// Real provider that uses `sysinfo::Disks`, borrowing a shared `Disks` instance.
+/// This lets the application own one `Disks` and reuse it across calls.
+pub struct SysDiskProvider<'a> {
+    disks: &'a mut Disks,
 }
 
-impl SysDiskProvider {
-    pub fn new() -> Self {
-        let sys = System::new(); // no automatic refresh
-        let disks = Disks::new_with_refreshed_list(); // initializes and refreshes disks
-        Self { sys, disks }
+impl<'a> SysDiskProvider<'a> {
+    /// Create a provider over an existing `Disks` instance.
+    /// We rely on `refresh()` calls to update the list/usage as needed.
+    pub fn new(disks: &'a mut Disks) -> Self {
+        Self { disks }
     }
 }
 
-impl DiskProvider for SysDiskProvider {
+impl<'a> DiskProvider for SysDiskProvider<'a> {
     fn refresh(&mut self) {
-        self.disks.refresh(true); // remove_not_listed_disks = true
+        // Refresh only disks; `true` removes not-listed disks (keeps list accurate).
+        self.disks.refresh(true);
     }
 
     fn disks(&self) -> Vec<(u64, u64, PathBuf)> {
@@ -110,19 +110,29 @@ pub fn disk_usage_with<P: DiskProvider>(provider: &mut P) -> (Vec<(u64, u64)>, f
     (Vec::new(), 404.0)
 }
 
+/// Convenience helper that constructs a short-lived `Disks` and returns the IPFS disk usage.
+/// Prefer using `disk_usage_with_disks(&mut Disks)` if you can reuse a long-lived `Disks`
+/// elsewhere in your app for best performance.
 pub fn disk_usage() -> (Vec<(u64, u64)>, f64) {
-    let mut provider = SysDiskProvider::new();
+    // Initialize with the list already refreshed.
+    let mut disks = Disks::new_with_refreshed_list();
+    disk_usage_with_disks(&mut disks)
+}
+
+/// Preferred helper that reuses a caller-provided `Disks` and refreshes **only** disks.
+pub fn disk_usage_with_disks(disks: &mut Disks) -> (Vec<(u64, u64)>, f64) {
+    let mut provider = SysDiskProvider::new(disks);
     disk_usage_with(&mut provider)
 }
 
 //          //          //          //          //          //          //          //          //          //          //          //
-
+//
 //                      //                      //                      //                                  //                      //
-
+//
 //                      //                      //          //          //          //                      //                      //
-
+//
 //                      //                      //                                  //                      //                      //
-
+//
 //                      //                      //          //          //          //                      //                      //
 
 #[cfg(test)]
@@ -206,7 +216,6 @@ mod tests {
 
         let (disks, usage) = disk_usage_with(&mut mock);
 
-        // New behavior: only the IPFS disk is returned
         assert_eq!(disks, vec![(50, 100)]);
         assert_eq!(
             usage, 50.0,
@@ -311,6 +320,7 @@ mod tests {
         std::fs::create_dir_all(&repo).unwrap();
         set_ipfs_path(&repo);
 
+        // Use the convenience wrapper which builds a short-lived `Disks`.
         let (disks, usage) = disk_usage();
 
         if (usage - 404.0).abs() < f64::EPSILON {

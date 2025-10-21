@@ -1,6 +1,6 @@
 use super::{
-    ActiveTask, NotifState, PinProgress, disk_usage, reconcile_once, run, spawn_pin_task,
-    update_profile_cid, update_progress_cid,
+    ActiveTask, NotifState, PinProgress, reconcile_once, run, spawn_pin_task, update_profile_cid,
+    update_progress_cid,
 };
 
 use std::time::Duration;
@@ -11,6 +11,7 @@ use tokio::sync::oneshot;
 
 use crate::{
     db::PoolTrait,
+    disk::disk_usage,
     ipfs::Client as Ipfs,
     model::PinState,
     service::FileInfo,
@@ -28,6 +29,7 @@ use crate::{
 //                      //                      //                                  //                      //                      //
 
 //                      //                      //          //          //          //                      //                      //
+
 #[cfg(any(test))]
 pub mod tests {
     use super::*;

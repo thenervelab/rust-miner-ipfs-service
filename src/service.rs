@@ -15,7 +15,7 @@ use tokio::{
 
 use crate::{
     db::{CidPool, PoolTrait},
-    disk::disk_usage,
+    disk::disk_usage_with_disks,
     ipfs::Client as Ipfs,
     ipfs::IpfsClient,
     model::{FileInfo, PinState},
@@ -26,6 +26,7 @@ use crate::{
 
 use metrics::{Unit, describe_counter, describe_gauge, describe_histogram};
 use metrics_exporter_prometheus::PrometheusBuilder;
+use sysinfo::Disks;
 
 #[derive(Default)]
 pub struct NotifState {
@@ -181,6 +182,15 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
 
     let concurrency = Arc::new(Semaphore::new(cfg.service.initial_pin_concurrency));
 
+    let disks = Arc::new(std::sync::Mutex::new(Disks::new_with_refreshed_list()));
+    let disk_fn = {
+        let disks = Arc::clone(&disks);
+        move || {
+            let mut guard = disks.lock().expect("lock Disks");
+            disk_usage_with_disks(&mut *guard)
+        }
+    };
+
     tokio::select! {
         _ = shutdown.notified() => {
             tracing::info!("Profile update shutting down during startup");
@@ -246,6 +256,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                 storage_item,
                 miner_account_hex: miner_profile_id,
                 raw_storage_key_hex,
+                disks: disks.clone(),
             };
 
             if let Err(e) = crate::monitoring::run_health_server(cfg).await {
@@ -414,7 +425,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                                 &active_pins,
                                 &pending_pins,
                                 &concurrency,
-                                disk_usage,
+                                &disk_fn,
                             ).await {
                             metrics::counter!("errors_total", "component" => "reconcile", "kind" => "reconcile_once").increment(1);
                             tracing::error!(error=?e, "reconcile_failed");
