@@ -849,6 +849,8 @@ where
 
     let stall = pool.update_progress(&updates)?;
 
+    // Collect stalled CIDs that need to be cancelled
+    let mut stalled_to_cancel = Vec::new();
     for (cid, _task) in active.iter_mut() {
         let notifier = notifier.clone();
         let cid = cid.clone();
@@ -856,7 +858,7 @@ where
 
         if !stalled_pins.lock().await.contains(&cid) && stall.contains(&cid) {
             stalled_pins.lock().await.insert(cid.clone());
-            concurrency.add_permits(1);
+            stalled_to_cancel.push(cid.clone());
             tracing::debug!("Stalled progress {}", cid);
 
             tokio::spawn(async move {
@@ -868,13 +870,24 @@ where
                         format!("Stalled progress {}", cid),
                         false,
                         "unused",
-                        &format!("Task {} stalling", cid),
+                        &format!("Task {} stalling - will be cancelled", cid),
                     )
                     .await;
             });
         }
     }
 
+    // Cancel and remove stalled tasks (same as error handling)
+    tracing::info!("Cancelling {} stalled tasks", stalled_to_cancel.len());
+    for cid in stalled_to_cancel {
+        tracing::info!("Cancelling stalled task: {}", &cid[0..16]);
+        if let Some(task) = active.remove(&cid) {
+            let _ = task.cancel_tx.send(());
+        }
+        concurrency.add_permits(1);
+    }
+
+    // Cancel and remove errored tasks
     for cid in errored {
         if let Some(task) = active.remove(&cid) {
             let _ = task.cancel_tx.send(());
