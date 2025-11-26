@@ -7,7 +7,6 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use crate::{
-    model::PinState,
     parse::{parse_json, parse_parquet},
     service::{PinProgress, ProgressSender},
 };
@@ -20,10 +19,12 @@ pub struct Client {
 
 #[async_trait::async_trait]
 pub trait IpfsClient: Send + Sync {
-    async fn cat<T: serde::de::DeserializeOwned + Send>(&self, cid: &str) -> Result<T>;
+    async fn cat<T: DeserializeOwned + Send>(&self, cid: &str) -> Result<T>;
     async fn pin_add_with_progress(&self, cid: &str, tx: ProgressSender) -> Result<()>;
     async fn pin_rm(&self, cid: &str) -> Result<()>;
-    async fn pin_verify(&self) -> Result<Vec<PinState>>;
+
+    async fn pin_ls_single(&self, cid: &str) -> Result<bool>;
+
     #[allow(dead_code)]
     async fn gc(&self) -> Result<()>;
     #[allow(dead_code)]
@@ -45,7 +46,6 @@ impl Client {
     pub async fn check_health(&self) -> Result<()> {
         let url = self.base.join("/api/v0/id")?;
         let _res = self.http.post(url).send().await?;
-
         Ok(())
     }
 
@@ -91,8 +91,7 @@ impl Client {
                     buffer.extend_from_slice(&bytes);
 
                     let slice: &[u8] = &buffer;
-                    let mut de = serde_json::Deserializer::from_slice(slice)
-                        .into_iter::<serde_json::Value>();
+                    let mut de = Deserializer::from_slice(slice).into_iter::<serde_json::Value>();
 
                     let mut consumed = 0;
                     while let Some(item) = de.next() {
@@ -146,32 +145,38 @@ impl Client {
         Ok(())
     }
 
-    pub async fn pin_verify(&self) -> Result<Vec<PinState>> {
-        let verify_url = self.base.join("/api/v0/pin/verify")?;
-        let response_verify = self
+    /// Lightweight per-CID pin check using /api/v0/pin/ls?arg=<cid>.
+    pub async fn pin_ls_single(&self, cid: &str) -> Result<bool> {
+        let url = self.base.join("/api/v0/pin/ls")?;
+        let resp = self
             .http
-            .post(verify_url)
-            .query(&[("verbose", "true")])
+            .post(url)
+            .query(&[("arg", cid), ("type", "recursive")])
             .send()
             .await?
             .error_for_status()?;
 
-        let body = response_verify.text().await?;
+        let val: serde_json::Value = resp.json().await?;
 
-        let stream = Deserializer::from_str(&body).into_iter::<PinState>();
-
-        let mut verification: Vec<PinState> = Vec::new();
-        for obj in stream {
-            verification.push(obj?);
+        // Older Kubo: Keys map
+        if let Some(keys) = val.get("Keys").and_then(|k| k.as_object()) {
+            if keys.contains_key(cid) {
+                return Ok(true);
+            }
         }
 
-        let mut response: Vec<PinState> = vec![];
-
-        for pin_state in verification {
-            response.push(pin_state)
+        // Newer Kubo: Pins array
+        if let Some(arr) = val.get("Pins").and_then(|a| a.as_array()) {
+            for v in arr {
+                if let Some(pin_cid) = v.get("Cid").and_then(|c| c.as_str()) {
+                    if pin_cid == cid {
+                        return Ok(true);
+                    }
+                }
+            }
         }
 
-        Ok(response)
+        Ok(false)
     }
 
     pub async fn pin_ls_all(&self) -> Result<HashSet<String>> {
@@ -250,7 +255,13 @@ impl Client {
                             tracing::info!(step = "bootstrap_add", %addr, "OK");
                         }
                         Err(e) => {
-                            tracing::warn!(step = "bootstrap_add", %addr, status = ?resp.status(), error = ?e, "HTTP error");
+                            tracing::warn!(
+                                step = "bootstrap_add",
+                                %addr,
+                                status = ?resp.status(),
+                                error = ?e,
+                                "HTTP error"
+                            );
                         }
                     },
                     Ok(Err(e)) => {
@@ -276,7 +287,13 @@ impl Client {
                             tracing::info!(step = "peering_add", %addr, "OK");
                         }
                         Err(e) => {
-                            tracing::warn!(step = "peering_add", %addr, status = ?resp.status(), error = ?e, "HTTP error");
+                            tracing::warn!(
+                                step = "peering_add",
+                                %addr,
+                                status = ?resp.status(),
+                                error = ?e,
+                                "HTTP error"
+                            );
                         }
                     },
                     Ok(Err(e)) => {
@@ -302,7 +319,13 @@ impl Client {
                             tracing::info!(step = "swarm_connect", %addr, "OK");
                         }
                         Err(e) => {
-                            tracing::warn!(step = "swarm_connect", %addr, status = ?resp.status(), error = ?e, "HTTP error");
+                            tracing::warn!(
+                                step = "swarm_connect",
+                                %addr,
+                                status = ?resp.status(),
+                                error = ?e,
+                                "HTTP error"
+                            );
                         }
                     },
                     Ok(Err(e)) => {
@@ -324,11 +347,11 @@ impl Client {
 
 #[async_trait::async_trait]
 impl IpfsClient for Client {
-    async fn cat<T: serde::de::DeserializeOwned + Send>(&self, cid: &str) -> Result<T> {
+    async fn cat<T: DeserializeOwned + Send>(&self, cid: &str) -> Result<T> {
         self.cat(cid).await
     }
 
-    async fn pin_add_with_progress(&self, cid: &str, tx: ProgressSender) -> anyhow::Result<()> {
+    async fn pin_add_with_progress(&self, cid: &str, tx: ProgressSender) -> Result<()> {
         self.pin_add_with_progress(cid, tx).await
     }
 
@@ -336,8 +359,8 @@ impl IpfsClient for Client {
         self.pin_rm(cid).await
     }
 
-    async fn pin_verify(&self) -> Result<Vec<PinState>> {
-        self.pin_verify().await
+    async fn pin_ls_single(&self, cid: &str) -> Result<bool> {
+        self.pin_ls_single(cid).await
     }
 
     async fn pin_ls_all(&self) -> Result<HashSet<String>> {
@@ -502,24 +525,6 @@ mod tests {
         let client = Client::new(server.base_url());
         let res = client.pin_rm("badcid").await;
         assert!(res.is_err());
-    }
-
-    #[tokio::test]
-    async fn pin_verify_parses_stream() {
-        let server = MockServer::start();
-        server.mock(|when, then| {
-            when.path("/api/v0/pin/verify");
-            then.status(200).body(
-                r#"{"Cid":"cid1","Pins":["ok"],"Ok":true}
-                   {"Cid":"cid2","Pins":["ok"],"Ok":true}"#,
-            );
-        });
-
-        let client = Client::new(server.base_url());
-        let res = client.pin_verify().await.unwrap();
-        assert_eq!(res.len(), 2);
-        assert_eq!(res[0].cid, "cid1");
-        assert_eq!(res[1].cid, "cid2");
     }
 
     #[tokio::test]

@@ -18,7 +18,6 @@ use crate::{
     disk::disk_usage_with_disks,
     ipfs::Client as Ipfs,
     ipfs::IpfsClient,
-    model::{FileInfo, PinState},
     notifier::MultiNotifier,
     settings::Settings,
     substrate::Chain,
@@ -28,15 +27,19 @@ use metrics::{Unit, describe_counter, describe_gauge, describe_histogram};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use sysinfo::Disks;
 
+// Re-export so tests can use `crate::service::FileInfo`
+pub use crate::model::FileInfo;
+
 #[derive(Default)]
 pub struct NotifState {
     last_status: Arc<Mutex<HashMap<String, bool>>>, // true = OK, false = error
 }
 
 pub struct ActiveTask {
-    progress_rx: ProgressReceiver,
-    cancel_tx: oneshot::Sender<()>,
-    permit: Option<OwnedSemaphorePermit>, // keeps semaphore slot
+    pub(crate) progress_rx: ProgressReceiver,
+    pub(crate) cancel_tx: oneshot::Sender<()>,
+    // Keeps a semaphore slot (base or extra) while the task is running
+    pub(crate) permit: Option<OwnedSemaphorePermit>,
 }
 
 pub enum PinProgress {
@@ -55,7 +58,7 @@ pub type ProgressSender = mpsc::Sender<PinProgress>;
 pub type ProgressReceiver = mpsc::Receiver<PinProgress>;
 
 impl NotifState {
-    async fn notify_change(
+    pub async fn notify_change(
         &mut self,
         notifier: &Arc<MultiNotifier>,
         key: String,
@@ -114,8 +117,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
     if let Some(port) = cfg.monitoring.metrics_port.or(Some(9464)) {
         PrometheusBuilder::new()
             .with_http_listener(([0, 0, 0, 0], port))
-            // you can also .add_global_label("service", "rust-miner-ipfs-service")
-            .install() // sets global recorder + starts the HTTP listener
+            .install()
             .context("install prometheus exporter")?;
         tracing::info!("Prometheus metrics listening on 0.0.0.0:{port} (path: /metrics)");
     }
@@ -180,7 +182,12 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
     let pending_pins: PinSet = Arc::new(Mutex::new(HashSet::new()));
     let stalled_pins: PinSet = Arc::new(Mutex::new(HashSet::new()));
 
-    let concurrency = Arc::new(Semaphore::new(cfg.service.initial_pin_concurrency));
+    // Poisoning skiplist: CIDs that recently errored or stalled
+    let skip_pins: PinSet = Arc::new(Mutex::new(HashSet::new()));
+
+    // Base concurrency + adaptive extra concurrency
+    let base_concurrency = Arc::new(Semaphore::new(cfg.service.initial_pin_concurrency));
+    let extra_concurrency = Arc::new(Semaphore::new(0));
 
     let disks = Arc::new(std::sync::Mutex::new(Disks::new_with_refreshed_list()));
     let disk_fn = {
@@ -204,30 +211,32 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                         chain_uninited = Some(c);
                         {
                             notif_state.lock().await.notify_change(
-                            &notifier,
-                            "substrate_connect".to_string(),
-                            true,
-                            "Blockchain RPC node connected",
-                            "unused",
-                        ).await;
-                            }
+                                &notifier,
+                                "substrate_connect".to_string(),
+                                true,
+                                "Blockchain RPC node connected",
+                                "unused",
+                            ).await;
+                        }
                         break;
                     },
                     Err(e) => {
                         tracing::info!("Connection attempt to Substrate node failed, error: {}", e);
-                        { notif_state.lock().await.notify_change(
-                            &notifier,
-                            "substrate_connect".to_string(),
-                            false,
-                            "Blockchain RPC node connected",
-                            &format!("Blockchain RPC node unreachable, error: {}", e),
-                        ).await;}
+                        {
+                            notif_state.lock().await.notify_change(
+                                &notifier,
+                                "substrate_connect".to_string(),
+                                false,
+                                "Blockchain RPC node connected",
+                                &format!("Blockchain RPC node unreachable, error: {}", e),
+                            ).await;
+                        }
 
                         // Back off ~100ms before next retry (max 10/sec)
                         sleep(Duration::from_millis(100)).await;
                     },
                 };
-            };
+            }
         } => {}
     }
 
@@ -291,7 +300,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
         _ = async {
             if let Err(e) = update_profile_cid(&cfg, &pool, &mut chain).await {
                 tracing::warn!(error=?e, "update_profile_cid_failed");
-                 notif_state.lock().await.notify_change(
+                notif_state.lock().await.notify_change(
                     &notifier,
                     "profile_update".to_string(),
                     false,
@@ -299,7 +308,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                     &format!("Profile update failed: {}", e),
                 ).await;
             } else {
-                 notif_state.lock().await.notify_change(
+                notif_state.lock().await.notify_change(
                     &notifier,
                     "profile_update".to_string(),
                     true,
@@ -393,7 +402,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                     _ = async {
                         if let Err(e) = update_profile_cid(&cfg, &pool, &mut chain).await {
                             tracing::warn!(error=?e, "update_profile_cid_failed");
-                             notif_state.lock().await.notify_change(
+                            notif_state.lock().await.notify_change(
                                 &notifier,
                                 "profile_update".to_string(),
                                 false,
@@ -401,7 +410,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                                 &format!("Profile update failed: {}", e),
                             ).await;
                         } else {
-                             notif_state.lock().await.notify_change(
+                            notif_state.lock().await.notify_change(
                                 &notifier,
                                 "profile_update".to_string(),
                                 true,
@@ -413,7 +422,6 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                 }
             }
             _ = reconcile.tick() => {
-
                 tokio::select! {
                     _ = shutdown.notified() => {
                         tracing::info!("Reconcile shutting down during tick");
@@ -421,12 +429,18 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                     }
                     _ = async {
                         let started = std::time::Instant::now();
-                        if let Err(e) = reconcile_once(&pool, &ipfs, &notifier, &notif_state,
-                                &active_pins,
-                                &pending_pins,
-                                &concurrency,
-                                &disk_fn,
-                            ).await {
+                        if let Err(e) = reconcile_once(
+                            &pool,
+                            &ipfs,
+                            &notifier,
+                            &notif_state,
+                            &active_pins,
+                            &pending_pins,
+                            &skip_pins,
+                            &base_concurrency,
+                            &extra_concurrency,
+                            &disk_fn,
+                        ).await {
                             metrics::counter!("errors_total", "component" => "reconcile", "kind" => "reconcile_once").increment(1);
                             tracing::error!(error=?e, "reconcile_failed");
                             notif_state.lock().await.notify_change(
@@ -447,10 +461,20 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                             ).await;
                         }
                         metrics::histogram!("reconcile_duration_seconds").record(started.elapsed().as_secs_f64());
-                        if let Err(e) = update_progress_cid(&pool, &ipfs, &notifier, &notif_state, active_pins.clone(),  stalled_pins.clone(), concurrency.clone()).await {
+                        if let Err(e) = update_progress_cid(
+                            &pool,
+                            &ipfs,
+                            &notifier,
+                            &notif_state,
+                            active_pins.clone(),
+                            stalled_pins.clone(),
+                            skip_pins.clone(),
+                            base_concurrency.clone(),
+                            extra_concurrency.clone(),
+                        ).await {
                             tracing::error!(error=?e, "progress update error");
                         }
-                   } => {}
+                    } => {}
                 }
             }
         }
@@ -490,7 +514,9 @@ pub async fn reconcile_once<P, C, F>(
     notif_state: &Arc<Mutex<NotifState>>,
     active_pins: &Arc<Mutex<HashMap<String, ActiveTask>>>,
     pending_pins: &PinSet,
-    concurrency: &Arc<Semaphore>,
+    skip_pins: &PinSet,
+    base_concurrency: &Arc<Semaphore>,
+    extra_concurrency: &Arc<Semaphore>,
     disk_fn: F,
 ) -> Result<()>
 where
@@ -518,35 +544,53 @@ where
 
     let desired: Vec<String> = profile.iter().map(|p| p.cid.trim().to_string()).collect();
 
-    for cid in desired.iter() {
-        if spawn_pin_task(
-            ipfs.clone(),
-            cid.clone(),
-            &active_pins.clone(),
-            &pending_pins.clone(),
-            concurrency.clone(),
-        )
-        .await
-        {
-            // triggers when new pin task background thread is started (spawn_pin_task returns true)
+    // Poisoning protection when starting new pin tasks
+    {
+        let mut skip = skip_pins.lock().await;
 
-            let _ = pool.touch_progress(cid);
-            let notifier = notifier.clone();
-            let cid = cid.clone();
-            let notif_state_t = notif_state.clone();
-            tokio::spawn(async move {
-                notif_state_t
-                    .lock()
-                    .await
-                    .notify_change(
-                        &notifier,
-                        format!("Pinning task {}", cid),
-                        true,
-                        &format!("Task {} started", cid),
-                        "unused",
-                    )
-                    .await;
-            });
+        // If all desired CIDs are in the skiplist, clear it to retry them.
+        let has_non_skipped = desired.iter().any(|cid| !skip.contains(cid));
+        if !has_non_skipped && !skip.is_empty() {
+            tracing::info!("All desired CIDs are in skiplist; clearing skiplist for retry");
+            skip.clear();
+        }
+
+        for cid in desired.iter() {
+            if skip.contains(cid) {
+                // Recently stalled/errored; skip for now so they don't poison concurrency.
+                continue;
+            }
+
+            if spawn_pin_task(
+                ipfs.clone(),
+                cid.clone(),
+                &active_pins.clone(),
+                &pending_pins.clone(),
+                base_concurrency.clone(),
+                extra_concurrency.clone(),
+            )
+            .await
+            {
+                // New background pin task started
+
+                let _ = pool.touch_progress(cid);
+                let notifier = notifier.clone();
+                let cid = cid.clone();
+                let notif_state_t = notif_state.clone();
+                tokio::spawn(async move {
+                    notif_state_t
+                        .lock()
+                        .await
+                        .notify_change(
+                            &notifier,
+                            format!("Pinning task {}", cid),
+                            true,
+                            &format!("Task {} started", cid),
+                            "unused",
+                        )
+                        .await;
+                });
+            }
         }
     }
 
@@ -577,52 +621,6 @@ where
         });
     }
 
-    let pin_state_errors: Result<Vec<PinState>> = async {
-        match ipfs.pin_verify().await {
-            Ok(states) => Ok(states),
-            Err(e) => {
-                tracing::error!("pin list verification error: {:?}", e);
-
-                // Record the failure in the pool
-                let _ = pool.record_failure(None, "pin_verification", &format!("{:?}", e));
-
-                // Continue gracefully — no pin states
-                Ok(vec![])
-            }
-        }
-    }
-    .await;
-
-    if let Ok(list) = pin_state_errors {
-        for p in list {
-            let e = match &p.err {
-                Some(e) => {
-                    tracing::error!("Problem with pinned CID: {}, Error: {}", p.cid, e);
-                    e
-                }
-                _ => &"unknown".to_string(),
-            };
-
-            let cidm = format!("pinned_cid_err_{}", p.cid);
-            let okm = format!("Problem with pinned CID: {} error: {}", p.cid, e);
-            let errm = format!("Pinned CID OK: {}", p.cid);
-
-            if p.err.is_some() {
-                notif_state
-                    .lock()
-                    .await
-                    .notify_change(notifier, cidm, false, &okm, &errm)
-                    .await;
-            } else {
-                notif_state
-                    .lock()
-                    .await
-                    .notify_change(notifier, cidm, true, &okm, &errm)
-                    .await;
-            };
-        }
-    };
-
     let (disks, ipfs_location_disk_usage) = disk_fn();
     metrics::gauge!("ipfs_disk_available_percent").set(ipfs_location_disk_usage);
 
@@ -631,7 +629,7 @@ where
 
         let gb: f64 = disk.1 as f64 / (1024.0 * 1024.0 * 1024.0);
 
-        let diskm = format!("disk_space_for_ipfs");
+        let diskm = "disk_space_for_ipfs".to_string();
         let okm = format!(
             "Disk used for IPFS storage available space left: {:.2}% of {:.2} GB",
             available, gb
@@ -670,7 +668,7 @@ where
         .await
         .notify_change(
             notifier,
-            format!("cant_find_ipfs_disk"),
+            "cant_find_ipfs_disk".to_string(),
             ipfs_location_disk_usage != 404.0,
             "Disk containing ipfs storage found",
             "Disk containing ipfs storage not found",
@@ -686,7 +684,8 @@ async fn spawn_pin_task<C: IpfsClient + 'static>(
     cid: String,
     active_pins: &Arc<Mutex<HashMap<String, ActiveTask>>>,
     pending_pins: &PinSet,
-    concurrency: Arc<Semaphore>,
+    base_concurrency: Arc<Semaphore>,
+    extra_concurrency: Arc<Semaphore>,
 ) -> bool {
     let mut active = active_pins.lock().await;
 
@@ -694,8 +693,16 @@ async fn spawn_pin_task<C: IpfsClient + 'static>(
         return false;
     }
 
-    // Try get a permit without waiting
-    if let Ok(permit) = concurrency.clone().try_acquire_owned() {
+    // Try to get a permit without waiting: first from base, then from extra.
+    let permit = if let Ok(p) = base_concurrency.clone().try_acquire_owned() {
+        Some(p)
+    } else if let Ok(p) = extra_concurrency.clone().try_acquire_owned() {
+        Some(p)
+    } else {
+        None
+    };
+
+    if let Some(permit) = permit {
         let (tx, rx) = mpsc::channel();
         let (cancel_tx, cancel_rx) = oneshot::channel();
 
@@ -721,27 +728,28 @@ async fn spawn_pin_task<C: IpfsClient + 'static>(
 
                         let mut active = active_map.lock().await;
                         if let Some(task) = active.get_mut(&cid) {
-                            task.permit.take(); // drops OwnedSemaphorePermit, frees slot
+                            // Drop permit, freeing the slot.
+                            task.permit.take();
                         }
                     }
 
                     _ = cancel_rx => {
                         tracing::info!("pinning {} canceled", cid);
-                        // Exit early, permit will be dropped when ActiveTask is removed
+                        // Permit will be dropped when ActiveTask is removed from the map.
                     }
                 }
             }
         });
-        return true;
+        true
     } else {
         // No slot available → mark as pending
-        if !pending_pins.lock().await.contains(&cid) {
+        let mut pending = pending_pins.lock().await;
+        if !pending.contains(&cid) {
             tracing::info!("CID {} added to pending queue", cid);
-            pending_pins.lock().await.insert(cid);
+            pending.insert(cid);
         }
+        false
     }
-
-    false
 }
 
 pub async fn update_progress_cid<P, C>(
@@ -751,7 +759,9 @@ pub async fn update_progress_cid<P, C>(
     notif_state: &Arc<Mutex<NotifState>>,
     active_pins: Arc<Mutex<HashMap<String, ActiveTask>>>,
     stalled_pins: PinSet,
-    concurrency: Arc<Semaphore>,
+    skip_pins: PinSet,
+    _base_concurrency: Arc<Semaphore>,
+    extra_concurrency: Arc<Semaphore>,
 ) -> Result<()>
 where
     P: PoolTrait + 'static,
@@ -764,6 +774,7 @@ where
     tracing::info!("{} Active pins", active.len());
     let mut updates = HashMap::new();
 
+    // 1) Drain progress channels
     for (cid, task) in active.iter_mut() {
         let mut latest: Option<PinProgress> = None;
 
@@ -772,7 +783,7 @@ where
         }
 
         if let Some(p) = latest {
-            match p {
+            match &p {
                 PinProgress::Blocks(v) => {
                     tracing::info!("CID {} progress: {} blocks", &cid[0..16], v);
                     if stalled_pins.lock().await.contains(cid) {
@@ -815,12 +826,14 @@ where
                             )
                             .await;
                     });
+
                     finished.push(cid.clone());
                 }
-                PinProgress::Error(ref e) => {
+                PinProgress::Error(e) => {
                     tracing::error!("CID {} pin error: {}", &cid[0..16], e);
                     let _ = pool.record_failure(Some(cid), "pin", &format!("{:?}", e));
                     errored.push(cid.clone());
+
                     let notifier = notifier.clone();
                     let cid = cid.clone();
                     let error = e.clone();
@@ -839,27 +852,31 @@ where
                             .await;
                     });
                 }
-                PinProgress::Raw(ref line) => {
-                    tracing::debug!("CID {} raw: {}", &cid[0..16], &line);
+                PinProgress::Raw(line) => {
+                    tracing::debug!("CID {} raw: {}", &cid[0..16], line);
                 }
             }
             updates.insert(cid.to_owned(), p);
         }
     }
 
-    let stall = pool.update_progress(&updates)?;
+    // 2) Persist progress in DB
+    let _ = pool.update_progress(&updates)?;
 
-    // Collect stalled CIDs that need to be cancelled
+    // 3) Stalled pins based on DB timestamps
+    let stall = pool.stalled_pins()?;
+
     let mut stalled_to_cancel = Vec::new();
     for (cid, _task) in active.iter_mut() {
-        let notifier = notifier.clone();
-        let cid = cid.clone();
-        let notif_state_t = notif_state.clone();
+        let cid_clone = cid.clone();
 
-        if !stalled_pins.lock().await.contains(&cid) && stall.contains(&cid) {
-            stalled_pins.lock().await.insert(cid.clone());
-            stalled_to_cancel.push(cid.clone());
-            tracing::debug!("Stalled progress {}", cid);
+        if !stalled_pins.lock().await.contains(&cid_clone) && stall.contains(&cid_clone) {
+            stalled_pins.lock().await.insert(cid_clone.clone());
+            stalled_to_cancel.push(cid_clone.clone());
+            tracing::debug!("Stalled progress {}", cid_clone);
+
+            let notifier = notifier.clone();
+            let notif_state_t = notif_state.clone();
 
             tokio::spawn(async move {
                 notif_state_t
@@ -867,86 +884,168 @@ where
                     .await
                     .notify_change(
                         &notifier,
-                        format!("Stalled progress {}", cid),
+                        format!("Stalled progress {}", cid_clone),
                         false,
                         "unused",
-                        &format!("Task {} stalling - will be cancelled", cid),
+                        &format!("Task {} stalling - will be cancelled", cid_clone),
                     )
                     .await;
             });
         }
     }
 
-    // Cancel and remove stalled tasks (same as error handling)
+    // Add stalled + errored CIDs to skiplist
+    if !stalled_to_cancel.is_empty() || !errored.is_empty() {
+        let mut skip = skip_pins.lock().await;
+        for cid in &stalled_to_cancel {
+            skip.insert(cid.clone());
+        }
+        for cid in &errored {
+            skip.insert(cid.clone());
+        }
+    }
+
+    // 4) Cancel stalled tasks
     tracing::info!("Cancelling {} stalled tasks", stalled_to_cancel.len());
     for cid in stalled_to_cancel {
         tracing::info!("Cancelling stalled task: {}", &cid[0..16]);
         if let Some(task) = active.remove(&cid) {
             let _ = task.cancel_tx.send(());
         }
-        concurrency.add_permits(1);
+        // Permit is released when ActiveTask (and its OwnedSemaphorePermit) is dropped.
     }
 
-    // Cancel and remove errored tasks
+    // 5) Cancel errored tasks
     for cid in errored {
         if let Some(task) = active.remove(&cid) {
             let _ = task.cancel_tx.send(());
         }
-        concurrency.add_permits(1);
     }
 
-    let completed: HashSet<String> = pool.completed_pins()?;
-    if !completed.is_empty() {
-        match ipfs.pin_verify().await {
-            Ok(pin_states) => {
-                let verified: HashSet<String> = pin_states
-                    .into_iter()
-                    .filter(|p| p.ok)
-                    .map(|p| p.cid)
-                    .collect();
+    // 6) Per-CID verify for just-completed pins
+    for cid in finished {
+        let ipfs = ipfs.clone();
+        let pool = pool.clone();
+        let active_pins = active_pins.clone();
+        let notifier = notifier.clone();
+        let notif_state = notif_state.clone();
+        let skip_pins = skip_pins.clone();
 
-                for cid in completed.difference(&verified) {
-                    if let Some(task) = active.remove(cid) {
-                        let _ = task.cancel_tx.send(());
-                    }
-
-                    let _ = pool.mark_incomplete(cid);
-
+        tokio::spawn(async move {
+            match ipfs.pin_ls_single(&cid).await {
+                Ok(true) => {
+                    // Verified OK, nothing to do. ActiveTask stays in map so we don't repin.
+                }
+                Ok(false) => {
+                    tracing::warn!(
+                        "CID {} reported complete but not found in pin/ls result",
+                        &cid[0..16]
+                    );
+                    let _ = pool.mark_incomplete(&cid);
                     let _ = pool.record_failure(
-                        Some(cid),
+                        Some(&cid),
                         "verify",
-                        "Completed pin not verifiable on IPFS",
+                        "Completed pin not found in local pin list",
                     );
 
-                    let notifier = notifier.clone();
-                    let cid = cid.clone();
-                    let notif_state_t = notif_state.clone();
-                    tokio::spawn(async move {
-                        notif_state_t
-                            .lock()
-                            .await
-                            .notify_change(
-                                &notifier,
-                                format!("Completed pin {}", cid),
-                                false,
-                                "unused",
-                                &format!("Pin {} no longer verifiable", cid),
-                            )
-                            .await;
-                    });
+                    {
+                        let mut active = active_pins.lock().await;
+                        active.remove(&cid);
+                    }
+
+                    {
+                        let mut skip = skip_pins.lock().await;
+                        skip.insert(cid.clone());
+                    }
+
+                    notif_state
+                        .lock()
+                        .await
+                        .notify_change(
+                            &notifier,
+                            format!("Completed pin {}", cid),
+                            false,
+                            "unused",
+                            &format!("Pin {} no longer verifiable via pin/ls", cid),
+                        )
+                        .await;
+                }
+                Err(e) => {
+                    tracing::error!("pin_ls_single failed for {}: {:?}", &cid[0..16], e);
+                    let _ = pool.record_failure(Some(&cid), "verify", &format!("{:?}", e));
+
+                    {
+                        let mut active = active_pins.lock().await;
+                        active.remove(&cid);
+                    }
+
+                    {
+                        let mut skip = skip_pins.lock().await;
+                        skip.insert(cid.clone());
+                    }
+
+                    notif_state
+                        .lock()
+                        .await
+                        .notify_change(
+                            &notifier,
+                            format!("Completed pin {}", cid),
+                            false,
+                            "unused",
+                            &format!("Pin {} verification error: {}", cid, e),
+                        )
+                        .await;
                 }
             }
-            Err(e) => {
-                tracing::error!("pin_verify failed: {:?}", e);
+        });
+    }
+
+    // 7) Adaptive concurrency tuning
+    let completed: HashSet<String> = pool.completed_pins()?;
+    let mut any_ongoing = false;
+    let mut all_ongoing_progressed = true;
+
+    for cid in active.keys() {
+        if completed.contains(cid) {
+            continue; // Completed pins don't count as ongoing.
+        }
+
+        any_ongoing = true;
+        match updates.get(cid) {
+            Some(PinProgress::Blocks(_)) | Some(PinProgress::Done) => {
+                // this CID made progress in this tick
+            }
+            _ => {
+                all_ongoing_progressed = false;
+                break;
             }
         }
     }
 
-    metrics::gauge!("active_pins").set(active.len() as f64);
+    drop(active); // release lock before touching semaphores
+
+    if any_ongoing {
+        if all_ongoing_progressed {
+            // Node is keeping up → allow one more extra slot.
+            extra_concurrency.add_permits(1);
+        } else {
+            // Some ongoing tasks did not progress → reset extra concurrency to 0 free permits.
+            loop {
+                match extra_concurrency.clone().try_acquire_owned() {
+                    Ok(permit) => drop(permit),
+                    Err(_) => break,
+                }
+            }
+        }
+    }
+
+    // 8) Metrics
+    metrics::gauge!("active_pins").set(active_pins.lock().await.len() as f64);
     metrics::gauge!("stalled_pins").set(stalled_pins.lock().await.len() as f64);
 
     Ok(())
 }
 
+// Make test module visible when compiling tests from external file.
 #[cfg(test)]
 mod tests;

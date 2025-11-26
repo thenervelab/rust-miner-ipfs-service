@@ -10,8 +10,7 @@ use tokio::{net::TcpListener, sync::Notify};
 use sysinfo::Disks;
 
 use crate::{
-    disk::disk_usage_with_disks, ipfs::IpfsClient, model::PinState, notifier::MultiNotifier,
-    substrate::Chain,
+    disk::disk_usage_with_disks, ipfs::IpfsClient, notifier::MultiNotifier, substrate::Chain,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -28,8 +27,6 @@ pub struct HealthStatus {
     disk_info: Vec<DiskInfo>,
     profile: String,
     notifications: Vec<String>,
-    pin_status: String,
-    pinned_content: Vec<PinState>,
 }
 
 pub async fn status_handler<C>(
@@ -76,28 +73,6 @@ where
         ("Error: no disks found".to_string(), vec![])
     };
 
-    // --- Pin verification ---
-    let (pin_status, pinned_content) = match ipfs.pin_verify().await {
-        Ok(pins) => {
-            let mut status: String = "Status: ".to_string();
-            let mut all_pin_ok = true;
-            for pin_state in &pins {
-                if !pin_state.ok {
-                    let e = pin_state.err.as_deref().unwrap_or("unknown");
-                    status.push_str(&format!("CID: {} Error: {} ", pin_state.cid, e));
-                    all_pin_ok = false;
-                }
-            }
-
-            if all_pin_ok {
-                status.push_str("OK");
-            }
-
-            (status, pins)
-        }
-        Err(e) => (format!("Internal error: {}", e), vec![]),
-    };
-
     // --- Profile fetch ---
     let profile_status = match chain
         .fetch_profile_cid(
@@ -131,8 +106,6 @@ where
         disk_info,
         profile: profile_status,
         notifications: notif_status,
-        pin_status,
-        pinned_content,
     })
 }
 
@@ -271,41 +244,6 @@ mod tests {
             status_handler(&ipfs, &mut chain, &notifier, None, None, None, None, &disks).await;
         let body = serde_json::to_string(&response.0).unwrap();
         assert!(body.contains("Error: chain down"));
-    }
-
-    #[tokio::test]
-    async fn status_pin_verify_error() {
-        let mut dummy = DummyIpfs::default();
-        dummy.pin_verify_result = Err(anyhow::anyhow!("pin verify failed"));
-        let ipfs = Arc::new(dummy);
-        let notifier = Arc::new(MultiNotifier::new());
-        let mut chain = Chain::dummy(true, Some(Ok(Some("profile".into()))));
-        let disks = Arc::new(Mutex::new(Disks::new_with_refreshed_list()));
-
-        let response =
-            status_handler(&ipfs, &mut chain, &notifier, None, None, None, None, &disks).await;
-        let body = serde_json::to_string(&response.0).unwrap();
-        assert!(body.contains("Internal error:"));
-    }
-
-    #[tokio::test]
-    async fn status_pin_with_error() {
-        let mut dummy = DummyIpfs::default();
-        dummy.pin_verify_result = Ok(vec![PinState {
-            cid: "cid1".into(),
-            ok: false,
-            err: Some("disk full".into()),
-            pin_status: None,
-        }]);
-        let ipfs = Arc::new(dummy);
-        let notifier = Arc::new(MultiNotifier::new());
-        let mut chain = Chain::dummy(true, Some(Ok(Some("profile".into()))));
-        let disks = Arc::new(Mutex::new(Disks::new_with_refreshed_list()));
-
-        let response =
-            status_handler(&ipfs, &mut chain, &notifier, None, None, None, None, &disks).await;
-        let body = serde_json::to_string(&response.0).unwrap();
-        assert!(body.contains("disk full"));
     }
 
     #[tokio::test]

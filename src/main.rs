@@ -77,6 +77,8 @@ async fn main() -> Result<()> {
             let _stalled_pins: PinSet = Arc::new(Mutex::new(HashSet::new()));
             let concurrency = Arc::new(tokio::sync::Semaphore::new(8)); // start with 8
             let ipfs = Arc::new(Ipfs::new(cfg.ipfs.api_url.clone()));
+            let skip_pins: PinSet = Arc::new(Mutex::new(HashSet::new()));
+            let extra_concurrency = Arc::new(tokio::sync::Semaphore::new(0));
 
             service::reconcile_once(
                 &pool,
@@ -85,7 +87,9 @@ async fn main() -> Result<()> {
                 &notif_state,
                 &active_pins,
                 &pending_pins,
+                &skip_pins,
                 &concurrency,
+                &extra_concurrency,
                 crate::disk::disk_usage,
             )
             .await?

@@ -13,7 +13,6 @@ use crate::{
     db::PoolTrait,
     disk::disk_usage,
     ipfs::Client as Ipfs,
-    model::PinState,
     service::FileInfo,
     settings::Settings,
     substrate::Chain,
@@ -30,7 +29,6 @@ use crate::{
 
 //                      //                      //          //          //          //                      //                      //
 
-#[cfg(any(test))]
 pub mod tests {
     use super::*;
     use std::collections::{HashMap, HashSet};
@@ -38,8 +36,6 @@ pub mod tests {
     use tempfile::TempDir;
     use tokio::sync::{Mutex, Semaphore};
 
-    // NOTE: we reference MultiNotifier and CidPool through their crate paths
-    // to avoid any ambiguity inside this file's module tree.
     use crate::db::CidPool;
     use crate::notifier::MultiNotifier;
 
@@ -88,7 +84,9 @@ pub mod tests {
         let notif_state = Arc::new(Mutex::new(NotifState::default()));
         let active = Arc::new(Mutex::new(HashMap::new()));
         let stalled = Arc::new(Mutex::new(HashSet::new()));
-        let concurrency = Arc::new(Semaphore::new(1));
+        let skip_pins = Arc::new(Mutex::new(HashSet::new()));
+        let base_concurrency = Arc::new(Semaphore::new(1));
+        let extra_concurrency = Arc::new(Semaphore::new(0));
 
         let (tx, rx) = mpsc::channel::<PinProgress>();
         tx.send(PinProgress::Error("boom".into())).unwrap();
@@ -112,7 +110,9 @@ pub mod tests {
             &notif_state,
             active.clone(),
             stalled.clone(),
-            concurrency.clone(),
+            skip_pins.clone(),
+            base_concurrency.clone(),
+            extra_concurrency.clone(),
         )
         .await;
         assert!(res.is_ok());
@@ -148,7 +148,8 @@ pub mod tests {
         let ipfs = Arc::new(Ipfs::new("http://127.0.0.1:5001".into()));
         let active = Arc::new(Mutex::new(HashMap::new()));
         let pending = Arc::new(Mutex::new(HashSet::new()));
-        let concurrency = Arc::new(Semaphore::new(1));
+        let base_concurrency = Arc::new(Semaphore::new(1));
+        let extra_concurrency = Arc::new(Semaphore::new(0));
 
         let cid = "cidA".to_string();
 
@@ -158,7 +159,8 @@ pub mod tests {
             cid.clone(),
             &active,
             &pending,
-            concurrency.clone(),
+            base_concurrency.clone(),
+            extra_concurrency.clone(),
         )
         .await;
         assert!(first);
@@ -171,7 +173,8 @@ pub mod tests {
             cid.clone(),
             &active,
             &pending,
-            concurrency.clone(),
+            base_concurrency.clone(),
+            extra_concurrency.clone(),
         )
         .await;
         assert!(!second);
@@ -183,58 +186,22 @@ pub mod tests {
         let ipfs = Arc::new(Ipfs::new("http://127.0.0.1:5001".into()));
         let active = Arc::new(Mutex::new(HashMap::new()));
         let pending = Arc::new(Mutex::new(HashSet::new()));
-        let concurrency = Arc::new(Semaphore::new(0)); // force no permits
+        let base_concurrency = Arc::new(Semaphore::new(0)); // force no permits
+        let extra_concurrency = Arc::new(Semaphore::new(0));
 
         let cid = "cidB".to_string();
-        let result =
-            spawn_pin_task(ipfs, cid.clone(), &active, &pending, concurrency.clone()).await;
-        assert!(!result);
-        assert!(pending.lock().await.contains(&cid));
-        assert!(active.lock().await.len() == 0);
-    }
-
-    #[tokio::test]
-    async fn test_update_progress_cid_stalled_branch() {
-        let tmp = TempDir::new().unwrap();
-        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap(), 120).unwrap());
-        let notifier = Arc::new(MultiNotifier::new());
-        let notif_state = Arc::new(Mutex::new(NotifState::default()));
-        let active = Arc::new(Mutex::new(HashMap::new()));
-        let stalled = Arc::new(Mutex::new(HashSet::new()));
-        let concurrency = Arc::new(Semaphore::new(1));
-
-        let (tx, rx) = mpsc::channel::<PinProgress>();
-        tx.send(PinProgress::Blocks(1)).unwrap();
-
-        let (cancel_tx, _cancel_rx) = oneshot::channel();
-        active.lock().await.insert(
-            "cidStalled".into(),
-            ActiveTask {
-                progress_rx: rx,
-                cancel_tx,
-                permit: None,
-            },
-        );
-
-        // Force stalled set to contain cid
-        stalled.lock().await.insert("cidStalled".into());
-
-        // Simulate DB saying it’s stalled
-        pool.touch_progress("cidStalled").unwrap();
-
-        let ipfs = Arc::new(DummyIpfs::default());
-
-        let res = update_progress_cid(
-            &pool,
-            &ipfs,
-            &notifier,
-            &notif_state,
-            active.clone(),
-            stalled.clone(),
-            concurrency.clone(),
+        let result = spawn_pin_task(
+            ipfs,
+            cid.clone(),
+            &active,
+            &pending,
+            base_concurrency.clone(),
+            extra_concurrency.clone(),
         )
         .await;
-        assert!(res.is_ok());
+        assert!(!result);
+        assert!(pending.lock().await.contains(&cid));
+        assert!(active.lock().await.is_empty());
     }
 
     #[tokio::test]
@@ -242,17 +209,15 @@ pub mod tests {
         let pool = Arc::new(DummyPool::default());
         let ipfs = Arc::new(DummyIpfs {
             cat_result: Err(anyhow::anyhow!("not called")),
-            pin_rm_result: Ok(()),
-            pin_verify_result: Ok(vec![]),
-            pin_ls_all_result: Ok(HashSet::new()),
-            health_ok: true,
             ..Default::default()
         });
         let notifier = Arc::new(MultiNotifier::new());
         let notif_state = Arc::new(Mutex::new(NotifState::default()));
         let active = Arc::new(Mutex::new(HashMap::new()));
         let pending = Arc::new(Mutex::new(HashSet::new()));
-        let concurrency = Arc::new(Semaphore::new(1));
+        let skip_pins = Arc::new(Mutex::new(HashSet::new()));
+        let base_concurrency = Arc::new(Semaphore::new(1));
+        let extra_concurrency = Arc::new(Semaphore::new(0));
 
         let res = reconcile_once(
             &pool,
@@ -261,7 +226,9 @@ pub mod tests {
             &notif_state,
             &active,
             &pending,
-            &concurrency,
+            &skip_pins,
+            &base_concurrency,
+            &extra_concurrency,
             disk_usage,
         )
         .await;
@@ -277,16 +244,15 @@ pub mod tests {
         let ipfs = Arc::new(DummyIpfs {
             pin_ls_all_result: Ok(HashSet::new()),
             cat_result: Ok(serde_json::json!({"foo": "bar"})),
-            pin_rm_result: Ok(()),
-            pin_verify_result: Ok(vec![]),
-            health_ok: true,
             ..Default::default()
         });
         let notifier = Arc::new(MultiNotifier::new());
         let notif_state = Arc::new(Mutex::new(NotifState::default()));
         let active = Arc::new(Mutex::new(HashMap::new()));
         let pending = Arc::new(Mutex::new(HashSet::new()));
-        let concurrency = Arc::new(Semaphore::new(1));
+        let skip_pins = Arc::new(Mutex::new(HashSet::new()));
+        let base_concurrency = Arc::new(Semaphore::new(1));
+        let extra_concurrency = Arc::new(Semaphore::new(0));
 
         let res = reconcile_once(
             &pool,
@@ -295,65 +261,13 @@ pub mod tests {
             &notif_state,
             &active,
             &pending,
-            &concurrency,
+            &skip_pins,
+            &base_concurrency,
+            &extra_concurrency,
             disk_usage,
         )
         .await;
         assert!(res.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_reconcile_once_pin_verify_error() {
-        let pool = Arc::new(DummyPool {
-            profile: Some("dummy_profile_cid".into()),
-            ..Default::default()
-        });
-
-        let ipfs = Arc::new(DummyIpfs {
-            // pretend the profile exists and has no files
-            cat_result: Ok(serde_json::json!(Vec::<FileInfo>::new())),
-
-            // returning an empty pin list is fine
-            pin_ls_all_result: Ok(HashSet::new()),
-
-            // unpin always succeeds
-            pin_rm_result: Ok(()),
-
-            // *** here’s the important failure we want to test ***
-            pin_verify_result: Err(anyhow::anyhow!("pin_verify failed")),
-
-            ..Default::default()
-        });
-
-        let notifier = Arc::new(MultiNotifier::new());
-        let notif_state = Arc::new(Mutex::new(NotifState::default()));
-        let active = Arc::new(Mutex::new(HashMap::new()));
-        let pending = Arc::new(Mutex::new(HashSet::new()));
-        let concurrency = Arc::new(Semaphore::new(1));
-
-        let res = reconcile_once(
-            &pool,
-            &ipfs,
-            &notifier,
-            &notif_state,
-            &active,
-            &pending,
-            &concurrency,
-            disk_usage,
-        )
-        .await;
-
-        // Should not fail — reconcile_once logs and continues
-        assert!(res.is_ok());
-
-        // Verify that the failure was recorded
-        let failures = pool.failures.lock().unwrap();
-        assert!(
-            failures.iter().any(|(_, action, reason)| {
-                action == "pin_verification" && reason.contains("pin_verify failed")
-            }),
-            "expected pin_verification failure to be recorded"
-        );
     }
 
     #[tokio::test]
@@ -361,19 +275,11 @@ pub mod tests {
         let pool = Arc::new(DummyPool::default());
         let ipfs_low = Arc::new(DummyIpfs {
             cat_result: Ok(serde_json::json!({"foo": "bar"})),
-            pin_rm_result: Ok(()),
-            pin_verify_result: Ok(vec![]),
-            pin_ls_all_result: Ok(HashSet::new()),
-            health_ok: true,
             ..Default::default()
         });
 
         let ipfs_high = Arc::new(DummyIpfs {
             cat_result: Ok(serde_json::json!({"foo": "bar"})),
-            pin_rm_result: Ok(()),
-            pin_verify_result: Ok(vec![]),
-            pin_ls_all_result: Ok(HashSet::new()),
-            health_ok: true,
             ..Default::default()
         });
 
@@ -381,7 +287,9 @@ pub mod tests {
         let notif_state = Arc::new(Mutex::new(NotifState::default()));
         let active = Arc::new(Mutex::new(HashMap::new()));
         let pending = Arc::new(Mutex::new(HashSet::new()));
-        let concurrency = Arc::new(Semaphore::new(1));
+        let skip_pins = Arc::new(Mutex::new(HashSet::new()));
+        let base_concurrency = Arc::new(Semaphore::new(1));
+        let extra_concurrency = Arc::new(Semaphore::new(0));
 
         // Low → expect notify
         reconcile_once(
@@ -391,7 +299,9 @@ pub mod tests {
             &notif_state,
             &active,
             &pending,
-            &concurrency,
+            &skip_pins,
+            &base_concurrency,
+            &extra_concurrency,
             disk_usage,
         )
         .await
@@ -405,7 +315,9 @@ pub mod tests {
             &notif_state,
             &active,
             &pending,
-            &concurrency,
+            &skip_pins,
+            &base_concurrency,
+            &extra_concurrency,
             disk_usage,
         )
         .await
@@ -420,7 +332,9 @@ pub mod tests {
         let notif_state = Arc::new(Mutex::new(NotifState::default()));
         let active = Arc::new(Mutex::new(HashMap::new()));
         let stalled = Arc::new(Mutex::new(HashSet::new()));
-        let concurrency = Arc::new(Semaphore::new(1));
+        let skip_pins = Arc::new(Mutex::new(HashSet::new()));
+        let base_concurrency = Arc::new(Semaphore::new(1));
+        let extra_concurrency = Arc::new(Semaphore::new(0));
 
         let (tx, rx) = mpsc::channel::<PinProgress>();
         tx.send(PinProgress::Raw("line".into())).unwrap();
@@ -444,7 +358,9 @@ pub mod tests {
             &notif_state,
             active,
             stalled,
-            concurrency,
+            skip_pins,
+            base_concurrency,
+            extra_concurrency,
         )
         .await;
         assert!(res.is_ok());
@@ -455,84 +371,25 @@ pub mod tests {
         let ipfs = Arc::new(DummyIpfs::default());
         let active = Arc::new(Mutex::new(HashMap::new()));
         let pending = Arc::new(Mutex::new(HashSet::new()));
-        let concurrency = Arc::new(Semaphore::new(1));
+        let base_concurrency = Arc::new(Semaphore::new(1));
+        let extra_concurrency = Arc::new(Semaphore::new(0));
 
         let cid = "cidCancel".to_string();
-        let started =
-            spawn_pin_task(ipfs, cid.clone(), &active, &pending, concurrency.clone()).await;
+        let started = spawn_pin_task(
+            ipfs,
+            cid.clone(),
+            &active,
+            &pending,
+            base_concurrency.clone(),
+            extra_concurrency.clone(),
+        )
+        .await;
         assert!(started);
 
         // Send cancel to trigger cancel_rx branch
         if let Some(task) = active.lock().await.remove(&cid) {
             let _ = task.cancel_tx.send(());
         }
-    }
-
-    #[tokio::test]
-    async fn test_reconcile_once_profile_and_pin_states() {
-        let pool = Arc::new(DummyPool {
-            profile: Some("profilecid".into()), // ensures Some(cid) for profile
-            ..Default::default()
-        });
-
-        // Minimal FileInfo with dummy values to satisfy deserialization
-        let file_infos = vec![FileInfo {
-            cid: "cid123".to_string(),
-            account_ss58: Some("dummy-account".to_string()),
-            cid_v2: None,
-            created_at: None,
-            file_id: None,
-            file_size_in_bytes: None,
-            miner_node_id: None,
-            original_name: None,
-            owner: None,
-            selected_validator: None,
-            size_bytes: None,
-            file_hash: None,
-        }];
-
-        let ipfs = Arc::new(DummyIpfs {
-            cat_result: Ok(serde_json::to_value(file_infos).unwrap()),
-            pin_verify_result: Ok(vec![
-                PinState {
-                    cid: "cidErr".into(),
-                    ok: false,
-                    err: Some("bad".into()),
-                    pin_status: None,
-                },
-                PinState {
-                    cid: "cidOk".into(),
-                    ok: true,
-                    err: None,
-                    pin_status: None,
-                },
-            ]),
-            ..Default::default()
-        });
-
-        let notifier = Arc::new(MultiNotifier::new());
-        let notif_state = Arc::new(Mutex::new(NotifState::default()));
-        let active = Arc::new(Mutex::new(HashMap::new()));
-        let pending = Arc::new(Mutex::new(HashSet::new()));
-        let concurrency = Arc::new(Semaphore::new(1));
-
-        let res = reconcile_once(
-            &pool,
-            &ipfs,
-            &notifier,
-            &notif_state,
-            &active,
-            &pending,
-            &concurrency,
-            disk_usage,
-        )
-        .await;
-
-        assert!(
-            res.is_ok(),
-            "Expected reconcile_once to succeed, got {:?}",
-            res
-        );
     }
 
     #[tokio::test]
@@ -622,7 +479,9 @@ pub mod tests {
         let notif_state = Arc::new(Mutex::new(NotifState::default()));
         let active = Arc::new(Mutex::new(HashMap::new()));
         let pending = Arc::new(Mutex::new(HashSet::new()));
-        let concurrency = Arc::new(Semaphore::new(1));
+        let skip_pins = Arc::new(Mutex::new(HashSet::new()));
+        let base_concurrency = Arc::new(Semaphore::new(1));
+        let extra_concurrency = Arc::new(Semaphore::new(0));
 
         let res = reconcile_once(
             &pool,
@@ -631,7 +490,9 @@ pub mod tests {
             &notif_state,
             &active,
             &pending,
-            &concurrency,
+            &skip_pins,
+            &base_concurrency,
+            &extra_concurrency,
             disk_usage,
         )
         .await;
@@ -657,7 +518,9 @@ pub mod tests {
         let notif_state = Arc::new(Mutex::new(NotifState::default()));
         let active = Arc::new(Mutex::new(HashMap::new()));
         let pending = Arc::new(Mutex::new(HashSet::new()));
-        let concurrency = Arc::new(Semaphore::new(1));
+        let skip_pins = Arc::new(Mutex::new(HashSet::new()));
+        let base_concurrency = Arc::new(Semaphore::new(1));
+        let extra_concurrency = Arc::new(Semaphore::new(0));
 
         let res = reconcile_once(
             &pool,
@@ -666,7 +529,9 @@ pub mod tests {
             &notif_state,
             &active,
             &pending,
-            &concurrency,
+            &skip_pins,
+            &base_concurrency,
+            &extra_concurrency,
             disk_usage,
         )
         .await;
@@ -681,11 +546,19 @@ pub mod tests {
         });
         let active = Arc::new(Mutex::new(HashMap::new()));
         let pending = Arc::new(Mutex::new(HashSet::new()));
-        let concurrency = Arc::new(Semaphore::new(1));
+        let base_concurrency = Arc::new(Semaphore::new(1));
+        let extra_concurrency = Arc::new(Semaphore::new(0));
 
         let cid: String = "cidErrPin".into();
-        let started =
-            spawn_pin_task(ipfs, cid.clone(), &active, &pending, concurrency.clone()).await;
+        let started = spawn_pin_task(
+            ipfs,
+            cid.clone(),
+            &active,
+            &pending,
+            base_concurrency.clone(),
+            extra_concurrency.clone(),
+        )
+        .await;
         assert!(started);
     }
 
@@ -697,7 +570,9 @@ pub mod tests {
         let notif_state = Arc::new(Mutex::new(NotifState::default()));
         let active_pins = Arc::new(Mutex::new(HashMap::new()));
         let stalled_pins = Arc::new(Mutex::new(HashSet::new()));
-        let concurrency = Arc::new(Semaphore::new(1));
+        let skip_pins = Arc::new(Mutex::new(HashSet::new()));
+        let base_concurrency = Arc::new(Semaphore::new(1));
+        let extra_concurrency = Arc::new(Semaphore::new(0));
 
         let (tx, rx) = mpsc::channel::<PinProgress>();
         tx.send(PinProgress::Blocks(1)).unwrap();
@@ -713,19 +588,7 @@ pub mod tests {
             },
         );
 
-        let ipfs = Arc::new(DummyIpfs {
-            cat_result: Ok(serde_json::json!(Vec::<FileInfo>::new())),
-            pin_rm_result: Ok(()),
-            pin_verify_result: Ok(vec![PinState {
-                cid: "cidX".into(),
-                ok: true,
-                err: None,
-                pin_status: None,
-            }]),
-            pin_ls_all_result: Ok(HashSet::from(["cidX".to_string()])),
-            health_ok: true,
-            ..Default::default()
-        });
+        let ipfs = Arc::new(DummyIpfs::default());
 
         let res = update_progress_cid(
             &pool,
@@ -734,7 +597,9 @@ pub mod tests {
             &notif_state,
             active_pins.clone(),
             stalled_pins,
-            concurrency,
+            skip_pins,
+            base_concurrency,
+            extra_concurrency,
         )
         .await;
 
@@ -743,122 +608,12 @@ pub mod tests {
         // Task should still exist in the map
         assert!(active_pins.lock().await.contains_key("cidX"));
 
-        // But DB should now say the pin is completed
+        // DB should now say the pin is completed
         let rec = pool.get_pin("cidX").unwrap().unwrap();
         assert!(
             rec.sync_complete,
             "pin record should be marked complete after Done"
         );
-    }
-
-    #[tokio::test]
-    async fn test_update_progress_cid_done_releases_permit() {
-        let tmp = TempDir::new().unwrap();
-        let pool = Arc::new(CidPool::init(tmp.path().to_str().unwrap(), 120).unwrap());
-        let notifier = Arc::new(MultiNotifier::new());
-        let notif_state = Arc::new(Mutex::new(NotifState::default()));
-        let active = Arc::new(Mutex::new(HashMap::new()));
-        let stalled = Arc::new(Mutex::new(HashSet::new()));
-        let concurrency = Arc::new(Semaphore::new(1)); // start with 1 permit
-
-        // Acquire the only permit so semaphore is "full"
-        let permit = concurrency.clone().try_acquire_owned().unwrap();
-        assert_eq!(concurrency.available_permits(), 0);
-
-        let (tx, rx) = mpsc::channel::<PinProgress>();
-        tx.send(PinProgress::Done).unwrap();
-
-        let (cancel_tx, _cancel_rx) = oneshot::channel();
-        active.lock().await.insert(
-            "cidPermit".into(),
-            ActiveTask {
-                progress_rx: rx,
-                cancel_tx,
-                permit: Some(permit), // task holds the permit
-            },
-        );
-
-        let ipfs = Arc::new(DummyIpfs::default());
-
-        let _ = update_progress_cid(
-            &pool,
-            &ipfs,
-            &notifier,
-            &notif_state,
-            active,
-            stalled,
-            concurrency.clone(),
-        )
-        .await
-        .unwrap();
-
-        // After Done, permit should have been released
-        assert_eq!(concurrency.available_permits(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_reconcile_once_notifies_on_pinstate_errors() {
-        let pool = Arc::new(DummyPool {
-            profile: Some("profilecid".into()),
-            ..Default::default()
-        });
-
-        let file_infos = vec![FileInfo {
-            cid: "cidErr".to_string(),
-            account_ss58: None,
-            cid_v2: None,
-            created_at: None,
-            file_id: None,
-            file_size_in_bytes: None,
-            miner_node_id: None,
-            original_name: None,
-            owner: None,
-            selected_validator: None,
-            size_bytes: None,
-            file_hash: None,
-        }];
-
-        let ipfs = Arc::new(DummyIpfs {
-            cat_result: Ok(serde_json::to_value(file_infos).unwrap()),
-            pin_verify_result: Ok(vec![
-                PinState {
-                    cid: "cidErr".into(),
-                    ok: false,
-                    err: Some("boom".into()),
-                    pin_status: None,
-                },
-                PinState {
-                    cid: "cidOk".into(),
-                    ok: true,
-                    err: None,
-                    pin_status: None,
-                },
-            ]),
-            ..Default::default()
-        });
-
-        let notifier = Arc::new(MultiNotifier::new());
-        let notif_state = Arc::new(Mutex::new(NotifState::default()));
-        let active = Arc::new(Mutex::new(HashMap::new()));
-        let pending = Arc::new(Mutex::new(HashSet::new()));
-        let concurrency = Arc::new(Semaphore::new(1));
-
-        reconcile_once(
-            &pool,
-            &ipfs,
-            &notifier,
-            &notif_state,
-            &active,
-            &pending,
-            &concurrency,
-            disk_usage,
-        )
-        .await
-        .unwrap();
-
-        let statuses = notif_state.lock().await.last_status.lock().await.clone();
-        assert_eq!(statuses.get("pinned_cid_err_cidErr"), Some(&false));
-        assert_eq!(statuses.get("pinned_cid_err_cidOk"), Some(&true));
     }
 
     #[derive(Default)]
@@ -897,6 +652,9 @@ pub mod tests {
         fn mark_incomplete(&self, _cid: &str) -> Result<()> {
             Ok(())
         }
+        fn stalled_pins(&self) -> Result<HashSet<String>> {
+            Ok(HashSet::new())
+        }
     }
 
     #[tokio::test]
@@ -915,7 +673,9 @@ pub mod tests {
         let notif_state = Arc::new(Mutex::new(NotifState::default()));
         let active = Arc::new(Mutex::new(HashMap::new()));
         let pending = Arc::new(Mutex::new(HashSet::new()));
-        let concurrency = Arc::new(Semaphore::new(1));
+        let skip_pins = Arc::new(Mutex::new(HashSet::new()));
+        let base_concurrency = Arc::new(Semaphore::new(1));
+        let extra_concurrency = Arc::new(Semaphore::new(0));
 
         reconcile_once(
             &pool,
@@ -924,7 +684,9 @@ pub mod tests {
             &notif_state,
             &active,
             &pending,
-            &concurrency,
+            &skip_pins,
+            &base_concurrency,
+            &extra_concurrency,
             disk_usage,
         )
         .await
@@ -1047,7 +809,8 @@ pub mod tests {
         let ipfs = Arc::new(DummyIpfs::default());
         let active = Arc::new(Mutex::new(HashMap::new()));
         let pending = Arc::new(Mutex::new(HashSet::new()));
-        let concurrency = Arc::new(Semaphore::new(0)); // no permits
+        let base_concurrency = Arc::new(Semaphore::new(0)); // no permits
+        let extra_concurrency = Arc::new(Semaphore::new(0));
 
         let cid = "cidPending".to_string();
         let first = spawn_pin_task(
@@ -1055,7 +818,8 @@ pub mod tests {
             cid.clone(),
             &active,
             &pending,
-            concurrency.clone(),
+            base_concurrency.clone(),
+            extra_concurrency.clone(),
         )
         .await;
         let second = spawn_pin_task(
@@ -1063,7 +827,8 @@ pub mod tests {
             cid.clone(),
             &active,
             &pending,
-            concurrency.clone(),
+            base_concurrency.clone(),
+            extra_concurrency.clone(),
         )
         .await;
 

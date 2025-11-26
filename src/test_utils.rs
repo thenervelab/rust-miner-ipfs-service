@@ -5,7 +5,6 @@ use std::sync::Arc;
 use crate::{
     db::PoolTrait,
     ipfs::IpfsClient,
-    model::PinState,
     service::{PinProgress, ProgressSender},
 };
 use async_trait::async_trait;
@@ -16,11 +15,11 @@ use std::collections::{HashMap, HashSet};
 pub struct DummyIpfs {
     pub cat_result: Result<serde_json::Value>,
     pub pin_rm_result: Result<()>,
-    pub pin_verify_result: Result<Vec<PinState>>,
     pub pin_ls_all_result: Result<HashSet<String>>,
+    pub pin_ls_single_result: Result<bool>,
     pub health_ok: bool,
 
-    // NEW: control success/failure of connect_bootstrap()
+    // control success/failure of connect_bootstrap()
     pub connect_bootstrap_result: Result<()>,
 }
 
@@ -29,8 +28,8 @@ impl Default for DummyIpfs {
         Self {
             cat_result: Ok(serde_json::json!({})),
             pin_rm_result: Ok(()),
-            pin_verify_result: Ok(vec![]),
             pin_ls_all_result: Ok(HashSet::new()),
+            pin_ls_single_result: Ok(true),
             health_ok: true,
             connect_bootstrap_result: Ok(()), // default to success
         }
@@ -56,9 +55,9 @@ impl IpfsClient for DummyIpfs {
         }
     }
 
-    async fn pin_verify(&self) -> Result<Vec<PinState>> {
-        match &self.pin_verify_result {
-            Ok(v) => Ok(v.clone()),
+    async fn pin_ls_single(&self, _cid: &str) -> Result<bool> {
+        match &self.pin_ls_single_result {
+            Ok(v) => Ok(*v),
             Err(e) => Err(anyhow::anyhow!(e.to_string())),
         }
     }
@@ -141,5 +140,9 @@ impl PoolTrait for DummyPool {
 
     fn mark_incomplete(&self, _cid: &str) -> Result<()> {
         Ok(())
+    }
+
+    fn stalled_pins(&self) -> Result<HashSet<String>> {
+        Ok(HashSet::new())
     }
 }

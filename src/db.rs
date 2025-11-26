@@ -25,6 +25,9 @@ pub trait PoolTrait: Send + Sync {
     fn record_failure(&self, cid: Option<&str>, action: &str, error: &str) -> Result<()>;
     fn completed_pins(&self) -> Result<HashSet<String>>;
     fn mark_incomplete(&self, cid: &str) -> Result<()>;
+
+    /// CIDs that have stalled (no progress for longer than stalling_limit).
+    fn stalled_pins(&self) -> Result<HashSet<String>>;
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -188,10 +191,6 @@ impl CidPool {
     }
 
     pub fn merge_pins(&self, cids: &HashSet<String>) -> anyhow::Result<()> {
-        use std::collections::HashSet;
-
-        // Convert input list into a set for efficient lookup
-
         // Collect existing pins
         let mut existing = HashSet::new();
         let mut iter = self.db.iter(0)?;
@@ -264,6 +263,8 @@ impl CidPool {
                 sync_complete: false,
             });
 
+            let old_last_progress_at = rec.last_progress_at;
+
             match progress {
                 PinProgress::Blocks(v) => {
                     if *v > rec.last_progress {
@@ -284,8 +285,8 @@ impl CidPool {
             }
 
             if !rec.sync_complete
-                && rec.last_progress_at > 0
-                && now.saturating_sub(rec.last_progress_at) > self.stalling_limit
+                && old_last_progress_at > 0
+                && now.saturating_sub(old_last_progress_at) > self.stalling_limit
             {
                 stale.insert(cid.clone());
             }
@@ -365,6 +366,25 @@ impl CidPool {
         }
         Ok(())
     }
+
+    /// Returns all CIDs whose last_progress_at is older than stalling_limit and not complete.
+    pub fn stalled_pins(&self) -> Result<HashSet<String>> {
+        let mut iter = self.db.iter(0)?; // column 0 = pins
+        let mut stalled = HashSet::new();
+        let now = chrono::Utc::now().timestamp() as u64;
+
+        while let Some((key, val)) = iter.next()? {
+            let (rec, _): (PinRecord, usize) = decode_from_slice(&val, config::standard())?;
+            if !rec.sync_complete
+                && rec.last_progress_at > 0
+                && now.saturating_sub(rec.last_progress_at) > self.stalling_limit
+            {
+                stalled.insert(String::from_utf8(key.to_vec())?);
+            }
+        }
+
+        Ok(stalled)
+    }
 }
 
 impl PoolTrait for CidPool {
@@ -395,6 +415,9 @@ impl PoolTrait for CidPool {
     }
     fn mark_incomplete(&self, cid: &str) -> Result<()> {
         self.mark_incomplete(cid)
+    }
+    fn stalled_pins(&self) -> Result<HashSet<String>> {
+        self.stalled_pins()
     }
 }
 
