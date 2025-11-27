@@ -428,51 +428,55 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                         break;
                     }
                     _ = async {
-                        let started = std::time::Instant::now();
-                        if let Err(e) = reconcile_once(
-                            &pool,
-                            &ipfs,
-                            &notifier,
-                            &notif_state,
-                            &active_pins,
-                            &pending_pins,
-                            &skip_pins,
-                            &base_concurrency,
-                            &extra_concurrency,
-                            &disk_fn,
-                        ).await {
-                            metrics::counter!("errors_total", "component" => "reconcile", "kind" => "reconcile_once").increment(1);
-                            tracing::error!(error=?e, "reconcile_failed");
-                            notif_state.lock().await.notify_change(
+                        loop {
+                            let started = std::time::Instant::now();
+                            if let Err(e) = reconcile_once(
+                                &pool,
+                                &ipfs,
                                 &notifier,
-                                "reconcile".to_string(),
-                                false,
-                                "Reconcile is working again",
-                                &format!("Profile reconcile failed: {}", e),
-                            ).await;
-                        } else {
-                            metrics::counter!("reconciles_total").increment(1);
-                            notif_state.lock().await.notify_change(
+                                &notif_state,
+                                &active_pins,
+                                &pending_pins,
+                                &skip_pins,
+                                &base_concurrency,
+                                &extra_concurrency,
+                                &disk_fn,
+                            ).await {
+                                metrics::counter!("errors_total", "component" => "reconcile", "kind" => "reconcile_once").increment(1);
+                                tracing::error!(error=?e, "reconcile_failed");
+                                notif_state.lock().await.notify_change(
+                                    &notifier,
+                                    "reconcile".to_string(),
+                                    false,
+                                    "Reconcile is working again",
+                                    &format!("Profile reconcile failed: {}", e),
+                                ).await;
+                            } else {
+                                metrics::counter!("reconciles_total").increment(1);
+                                notif_state.lock().await.notify_change(
+                                    &notifier,
+                                    "reconcile".to_string(),
+                                    true,
+                                    "Reconcile is working again",
+                                    "unused",
+                                ).await;
+                            }
+                            metrics::histogram!("reconcile_duration_seconds").record(started.elapsed().as_secs_f64());
+                            match update_progress_cid(
+                                &pool,
+                                &ipfs,
                                 &notifier,
-                                "reconcile".to_string(),
-                                true,
-                                "Reconcile is working again",
-                                "unused",
-                            ).await;
-                        }
-                        metrics::histogram!("reconcile_duration_seconds").record(started.elapsed().as_secs_f64());
-                        if let Err(e) = update_progress_cid(
-                            &pool,
-                            &ipfs,
-                            &notifier,
-                            &notif_state,
-                            active_pins.clone(),
-                            stalled_pins.clone(),
-                            skip_pins.clone(),
-                            base_concurrency.clone(),
-                            extra_concurrency.clone(),
-                        ).await {
-                            tracing::error!(error=?e, "progress update error");
+                                &notif_state,
+                                active_pins.clone(),
+                                stalled_pins.clone(),
+                                skip_pins.clone(),
+                                base_concurrency.clone(),
+                                extra_concurrency.clone(),
+                            ).await {
+                                Ok(true) => {},
+                                Ok(false) => break,
+                                Err(e) => tracing::error!(error=?e, "progress update error"),
+                            }
                         }
                     } => {}
                 }
@@ -766,14 +770,15 @@ pub async fn update_progress_cid<P, C>(
     stalled_pins: PinSet,
     skip_pins: PinSet,
     _base_concurrency: Arc<Semaphore>,
-    extra_concurrency: Arc<Semaphore>,
-) -> Result<()>
+    mut extra_concurrency: Arc<Semaphore>,
+) -> Result<bool>
 where
     P: PoolTrait + 'static,
     C: IpfsClient + 'static,
 {
     let mut active = active_pins.lock().await;
     let mut finished = Vec::new();
+    let mut pin_complete = false;
     let mut errored = Vec::new();
 
     tracing::info!("{} Active pins", active.len());
@@ -833,6 +838,7 @@ where
                     });
 
                     finished.push(cid.clone());
+                    pin_complete = true;
                 }
                 PinProgress::Error(e) => {
                     tracing::error!("CID {} pin error: {}", &cid[0..16], e);
@@ -1031,8 +1037,9 @@ where
 
     if any_ongoing {
         if all_ongoing_progressed {
-            // Node is keeping up → allow one more extra slot.
             extra_concurrency.add_permits(1);
+        } else {
+            extra_concurrency = Arc::new(Semaphore::new(0));
         }
     }
 
@@ -1040,7 +1047,7 @@ where
     metrics::gauge!("active_pins").set(active_pins.lock().await.len() as f64);
     metrics::gauge!("stalled_pins").set(stalled_pins.lock().await.len() as f64);
 
-    Ok(())
+    Ok(pin_complete)
 }
 
 // Make test module visible when compiling tests from external file.
