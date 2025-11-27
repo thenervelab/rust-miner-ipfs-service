@@ -187,7 +187,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
 
     // Base concurrency + adaptive extra concurrency
     let base_concurrency = Arc::new(Semaphore::new(cfg.service.initial_pin_concurrency));
-    let extra_concurrency = Arc::new(Semaphore::new(0));
+    let mut extra_concurrency = Arc::new(Semaphore::new(0));
 
     let disks = Arc::new(std::sync::Mutex::new(Disks::new_with_refreshed_list()));
     let disk_fn = {
@@ -471,7 +471,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                                 stalled_pins.clone(),
                                 skip_pins.clone(),
                                 base_concurrency.clone(),
-                                extra_concurrency.clone(),
+                                &mut extra_concurrency,
                             ).await {
                                 Ok(true) => {},
                                 Ok(false) => break,
@@ -770,7 +770,7 @@ pub async fn update_progress_cid<P, C>(
     stalled_pins: PinSet,
     skip_pins: PinSet,
     _base_concurrency: Arc<Semaphore>,
-    mut extra_concurrency: Arc<Semaphore>,
+    extra_concurrency: &mut Arc<Semaphore>,
 ) -> Result<bool>
 where
     P: PoolTrait + 'static,
@@ -1039,7 +1039,7 @@ where
         if all_ongoing_progressed {
             extra_concurrency.add_permits(1);
         } else {
-            extra_concurrency = Arc::new(Semaphore::new(0));
+            *extra_concurrency = Arc::new(Semaphore::new(0));
         }
     }
 

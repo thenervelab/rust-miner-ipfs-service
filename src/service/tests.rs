@@ -86,7 +86,7 @@ pub mod tests {
         let stalled = Arc::new(Mutex::new(HashSet::new()));
         let skip_pins = Arc::new(Mutex::new(HashSet::new()));
         let base_concurrency = Arc::new(Semaphore::new(1));
-        let extra_concurrency = Arc::new(Semaphore::new(0));
+        let mut extra_concurrency = Arc::new(Semaphore::new(0));
 
         let (tx, rx) = mpsc::channel::<PinProgress>();
         tx.send(PinProgress::Error("boom".into())).unwrap();
@@ -112,7 +112,7 @@ pub mod tests {
             stalled.clone(),
             skip_pins.clone(),
             base_concurrency.clone(),
-            extra_concurrency.clone(),
+            &mut extra_concurrency,
         )
         .await;
         assert!(res.is_ok());
@@ -334,7 +334,7 @@ pub mod tests {
         let stalled = Arc::new(Mutex::new(HashSet::new()));
         let skip_pins = Arc::new(Mutex::new(HashSet::new()));
         let base_concurrency = Arc::new(Semaphore::new(1));
-        let extra_concurrency = Arc::new(Semaphore::new(0));
+        let mut extra_concurrency = Arc::new(Semaphore::new(0));
 
         let (tx, rx) = mpsc::channel::<PinProgress>();
         tx.send(PinProgress::Raw("line".into())).unwrap();
@@ -360,7 +360,7 @@ pub mod tests {
             stalled,
             skip_pins,
             base_concurrency,
-            extra_concurrency,
+            &mut extra_concurrency,
         )
         .await;
         assert!(res.is_ok());
@@ -572,7 +572,7 @@ pub mod tests {
         let stalled_pins = Arc::new(Mutex::new(HashSet::new()));
         let skip_pins = Arc::new(Mutex::new(HashSet::new()));
         let base_concurrency = Arc::new(Semaphore::new(1));
-        let extra_concurrency = Arc::new(Semaphore::new(0));
+        let mut extra_concurrency = Arc::new(Semaphore::new(0));
 
         let (tx, rx) = mpsc::channel::<PinProgress>();
         tx.send(PinProgress::Blocks(1)).unwrap();
@@ -599,7 +599,7 @@ pub mod tests {
             stalled_pins,
             skip_pins,
             base_concurrency,
-            extra_concurrency,
+            &mut extra_concurrency,
         )
         .await;
 
