@@ -428,13 +428,8 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                         break;
                     }
                     _ = async {
-                        let mut init = 0;
+
                         loop {
-                            if init > 0 {
-                                sleep(Duration::from_millis(600)).await;
-                            }
-                            init += 1;
-                            tracing::info!("ENTER THE MATRIX");
                             let started = std::time::Instant::now();
                             if let Err(e) = reconcile_once(
                                 &pool,
@@ -468,6 +463,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                                 ).await;
                             }
                             metrics::histogram!("reconcile_duration_seconds").record(started.elapsed().as_secs_f64());
+                            sleep(Duration::from_millis(300)).await;
                             match update_progress_cid(
                                 &pool,
                                 &ipfs,
