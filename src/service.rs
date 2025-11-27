@@ -277,7 +277,6 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
     tracing::info!("Commencing node operation");
 
     let mut poll = time::interval(Duration::from_secs(cfg.service.poll_interval_secs));
-    poll.set_missed_tick_behavior(MissedTickBehavior::Skip);
     poll.tick().await;
 
     let mut reconcile = time::interval(Duration::from_secs(cfg.service.reconcile_interval_secs));
@@ -292,13 +291,14 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
     // reset last_progress_at values to current time so that node downtime does not trigger stalled progress detection
     let _ = pool.touch_all_progress();
 
+    // Initial profile CID & background profile fetch
     tokio::select! {
         _ = shutdown.notified() => {
             tracing::info!("Profile update shutting down during startup");
             return Ok(())
         }
         _ = async {
-            if let Err(e) = update_profile_cid(&cfg, &pool, &mut chain).await {
+            if let Err(e) = update_profile_cid(&cfg, &pool, &mut chain, &ipfs).await {
                 tracing::warn!(error=?e, "update_profile_cid_failed");
                 notif_state.lock().await.notify_change(
                     &notifier,
@@ -400,7 +400,7 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                         break;
                     }
                     _ = async {
-                        if let Err(e) = update_profile_cid(&cfg, &pool, &mut chain).await {
+                        if let Err(e) = update_profile_cid(&cfg, &pool, &mut chain, &ipfs).await {
                             tracing::warn!(error=?e, "update_profile_cid_failed");
                             notif_state.lock().await.notify_change(
                                 &notifier,
@@ -428,7 +428,13 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                         break;
                     }
                     _ = async {
+                        let mut init = 0;
                         loop {
+                            if init > 0 {
+                                sleep(Duration::from_millis(600)).await;
+                            }
+                            init += 1;
+                            tracing::info!("ENTER THE MATRIX");
                             let started = std::time::Instant::now();
                             if let Err(e) = reconcile_once(
                                 &pool,
@@ -487,10 +493,19 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
     Ok(())
 }
 
+///
+/// Periodically:
+/// 1. Fetch miner profile CID from chain.
+/// 2. If it changed, update DB and spawn a background task
+///    that does a *no-timeout cat* of the profile CID and
+///    writes the current_latest_miner_profile (list of CIDs to pin)
+///    into the DB.
+///
 pub async fn update_profile_cid(
     cfg: &Settings,
     pool: &Arc<CidPool>,
     chain: &mut Chain,
+    ipfs: &Arc<Ipfs>,
 ) -> Result<()> {
     tracing::info!("Profile CID update commenced");
 
@@ -507,6 +522,51 @@ pub async fn update_profile_cid(
     if cid_opt != old {
         tracing::info!(old=?old, new=?cid_opt, "profile_cid_changed");
         pool.set_profile(cid_opt.as_deref())?;
+
+        if let Some(cid) = cid_opt {
+            let pool_clone = Arc::clone(pool);
+            let ipfs_clone = Arc::clone(ipfs);
+
+            // Background task, *no timeout* on the cat.
+            tokio::spawn(async move {
+                let cid_clone = cid.clone();
+                if let Err(e) = async {
+                    tracing::info!(profile_cid = %cid_clone, "Fetching miner profile for new CID");
+                    let profile: Vec<FileInfo> = ipfs_clone
+                        .cat_no_timeout::<Vec<FileInfo>>(&cid_clone)
+                        .await
+                        .context("Failed to get miner profile from IPFS")?;
+
+                    let desired: Vec<String> =
+                        profile.iter().map(|p| p.cid.trim().to_string()).collect();
+
+                    tracing::info!(
+                        pins = desired.len(),
+                        profile_cid = %cid_clone,
+                        "miner_profile_loaded_and_stored"
+                    );
+
+                    pool_clone
+                        .set_profile_pins(&desired)
+                        .context("Failed to persist latest miner profile pins")?;
+
+                    Ok::<(), anyhow::Error>(())
+                }
+                .await
+                {
+                    tracing::error!(
+                        error = ?e,
+                        profile_cid = %cid_clone,
+                        "background_profile_update_failed"
+                    );
+                    let _ = pool_clone.record_failure(
+                        Some(&cid_clone),
+                        "profile_cat",
+                        &format!("{:?}", e),
+                    );
+                }
+            });
+        }
     }
     Ok(())
 }
@@ -530,23 +590,19 @@ where
 {
     tracing::info!("Reconcile commenced");
 
-    let cid_opt = pool.get_profile()?;
-    let Some(profile_cid) = cid_opt else {
-        tracing::warn!("no_profile_cid_set_yet");
-        return Ok(());
+    // Desired CIDs now come from DB: current_latest_miner_profile
+    let desired = match pool.get_profile_pins()? {
+        Some(list) => list,
+        None => {
+            tracing::warn!("no_profile_pins_set_yet");
+            return Ok(());
+        }
     };
 
-    let profile: Vec<FileInfo> = ipfs
-        .cat::<Vec<FileInfo>>(&profile_cid)
-        .await
-        .context("Failed to get miner profile from IPFS")?;
-
-    tracing::info!(pins = profile.len(), "profile_loaded");
+    tracing::info!(pins = desired.len(), "profile_loaded");
 
     let pin_list = ipfs.pin_ls_all().await?;
     let _ = pool.merge_pins(&pin_list); // all top level pins are added to database to keep track of unnecessary pins
-
-    let desired: Vec<String> = profile.iter().map(|p| p.cid.trim().to_string()).collect();
 
     // Poisoning protection when starting new pin tasks
     {
@@ -916,9 +972,12 @@ where
         }
     }
 
+    let mut some_stalled_or_errored = false;
+
     // 4) Cancel stalled tasks
     tracing::info!("Cancelling {} stalled tasks", stalled_to_cancel.len());
     for cid in stalled_to_cancel {
+        some_stalled_or_errored = true;
         tracing::info!("Cancelling stalled task: {}", &cid[0..16]);
         if let Some(task) = active.remove(&cid) {
             let _ = task.cancel_tx.send(());
@@ -928,6 +987,7 @@ where
 
     // 5) Cancel errored tasks
     for cid in errored {
+        some_stalled_or_errored = true;
         if let Some(task) = active.remove(&cid) {
             let _ = task.cancel_tx.send(());
         }
@@ -1047,7 +1107,7 @@ where
     metrics::gauge!("active_pins").set(active_pins.lock().await.len() as f64);
     metrics::gauge!("stalled_pins").set(stalled_pins.lock().await.len() as f64);
 
-    Ok(pin_complete)
+    Ok(pin_complete || some_stalled_or_errored)
 }
 
 // Make test module visible when compiling tests from external file.

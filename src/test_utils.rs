@@ -145,4 +145,11 @@ impl PoolTrait for DummyPool {
     fn stalled_pins(&self) -> Result<HashSet<String>> {
         Ok(HashSet::new())
     }
+
+    fn get_profile_pins(&self) -> Result<Option<Vec<String>>> {
+        // For tests:
+        // - If `profile` is set, treat it as a single CID to pin.
+        // - If `profile` is None, behave like "no profile pins yet".
+        Ok(self.profile.as_ref().map(|cid| vec![cid.clone()]))
+    }
 }

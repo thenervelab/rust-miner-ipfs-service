@@ -154,7 +154,7 @@ pub mod tests {
         let cid = "cidA".to_string();
 
         // First call inserts task
-        let (first, permits) = spawn_pin_task(
+        let (first, _permits) = spawn_pin_task(
             ipfs.clone(),
             cid.clone(),
             &active,
@@ -168,7 +168,7 @@ pub mod tests {
         assert!(active.lock().await.len() == 1);
 
         // Second call sees duplicate
-        let (second, permits) = spawn_pin_task(
+        let (second, _permits) = spawn_pin_task(
             ipfs.clone(),
             cid.clone(),
             &active,
@@ -190,7 +190,7 @@ pub mod tests {
         let extra_concurrency = Arc::new(Semaphore::new(0));
 
         let cid = "cidB".to_string();
-        let (result, permits) = spawn_pin_task(
+        let (result, _permits) = spawn_pin_task(
             ipfs,
             cid.clone(),
             &active,
@@ -206,6 +206,7 @@ pub mod tests {
 
     #[tokio::test]
     async fn test_reconcile_once_no_profile() {
+        // DummyPool returns no profile pins -> reconcile_once should early-return Ok(())
         let pool = Arc::new(DummyPool::default());
         let ipfs = Arc::new(DummyIpfs {
             cat_result: Err(anyhow::anyhow!("not called")),
@@ -237,6 +238,8 @@ pub mod tests {
 
     #[tokio::test]
     async fn test_reconcile_once_unpin_branch() {
+        // We don't deeply assert the unpin, just that reconcile_once runs OK with a pool
+        // that would like to unpin something.
         let pool = Arc::new(DummyPool {
             to_unpin_result: vec!["QmDeadbeef".into()],
             ..Default::default()
@@ -291,7 +294,7 @@ pub mod tests {
         let base_concurrency = Arc::new(Semaphore::new(1));
         let extra_concurrency = Arc::new(Semaphore::new(0));
 
-        // Low → expect notify
+        // Low
         reconcile_once(
             &pool,
             &ipfs_low,
@@ -307,7 +310,7 @@ pub mod tests {
         .await
         .unwrap();
 
-        // High → expect notify_change back to Normal
+        // High
         reconcile_once(
             &pool,
             &ipfs_high,
@@ -375,7 +378,7 @@ pub mod tests {
         let extra_concurrency = Arc::new(Semaphore::new(0));
 
         let cid = "cidCancel".to_string();
-        let (started, permits) = spawn_pin_task(
+        let (started, _permits) = spawn_pin_task(
             ipfs,
             cid.clone(),
             &active,
@@ -423,8 +426,10 @@ pub mod tests {
             )
             .await;
 
+        let ipfs = Arc::new(Ipfs::new("http://127.0.0.1:5001".into()));
+
         // run update
-        let res = update_profile_cid(&cfg, &pool, &mut chain).await;
+        let res = update_profile_cid(&cfg, &pool, &mut chain, &ipfs).await;
         dbg!(&res);
         assert!(res.is_ok());
         let stored = pool.get_profile().unwrap();
@@ -454,7 +459,10 @@ pub mod tests {
             },
             ..Default::default()
         };
-        let res = update_profile_cid(&cfg, &pool, &mut chain).await;
+
+        let ipfs = Arc::new(Ipfs::new("http://127.0.0.1:5001".into()));
+
+        let res = update_profile_cid(&cfg, &pool, &mut chain, &ipfs).await;
         assert!(res.is_ok());
 
         // pool remains unchanged
@@ -505,13 +513,15 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn test_reconcile_once_cat_error() {
+    async fn test_reconcile_once_pin_ls_error() {
+        // Adapted from the old `cat_error` test:
+        // now reconcile_once's main IPFS failure path is pin_ls_all().
         let pool = Arc::new(DummyPool {
             profile: Some("cid".into()),
             ..Default::default()
         });
         let ipfs = Arc::new(DummyIpfs {
-            cat_result: Err(anyhow::anyhow!("bad json")),
+            pin_ls_all_result: Err(anyhow::anyhow!("pin ls failed")),
             ..Default::default()
         });
         let notifier = Arc::new(MultiNotifier::new());
@@ -550,7 +560,7 @@ pub mod tests {
         let extra_concurrency = Arc::new(Semaphore::new(0));
 
         let cid: String = "cidErrPin".into();
-        let (started, permits) = spawn_pin_task(
+        let (started, _permits) = spawn_pin_task(
             ipfs,
             cid.clone(),
             &active,
@@ -626,6 +636,12 @@ pub mod tests {
         fn get_profile(&self) -> Result<Option<String>> {
             Ok(self.profile.clone())
         }
+
+        fn get_profile_pins(&self) -> Result<Option<Vec<String>>> {
+            // For tests we just need reconcile_once to proceed and call merge_pins.
+            Ok(Some(Vec::new()))
+        }
+
         fn merge_pins(&self, _cids: &HashSet<String>) -> Result<()> {
             *self.merge_called.lock().unwrap() += 1;
             Ok(())
@@ -798,9 +814,11 @@ pub mod tests {
         let mut chain = Chain::dummy(true, Some(Err(anyhow::anyhow!("boom"))));
         let tmp = tempfile::TempDir::new().unwrap();
         let pool = Arc::new(crate::db::CidPool::init(tmp.path().to_str().unwrap(), 120).unwrap());
-
         let cfg = Settings::default();
-        let res = update_profile_cid(&cfg, &pool, &mut chain).await;
+
+        let ipfs = Arc::new(Ipfs::new("http://127.0.0.1:5001".into()));
+
+        let res = update_profile_cid(&cfg, &pool, &mut chain, &ipfs).await;
         assert!(res.is_err(), "expected error to propagate");
     }
 
@@ -813,7 +831,7 @@ pub mod tests {
         let extra_concurrency = Arc::new(Semaphore::new(0));
 
         let cid = "cidPending".to_string();
-        let (first, permits) = spawn_pin_task(
+        let (first, _permits) = spawn_pin_task(
             ipfs.clone(),
             cid.clone(),
             &active,
@@ -822,7 +840,7 @@ pub mod tests {
             extra_concurrency.clone(),
         )
         .await;
-        let (second, permits) = spawn_pin_task(
+        let (second, _permits) = spawn_pin_task(
             ipfs.clone(),
             cid.clone(),
             &active,

@@ -28,6 +28,9 @@ pub trait PoolTrait: Send + Sync {
 
     /// CIDs that have stalled (no progress for longer than stalling_limit).
     fn stalled_pins(&self) -> Result<HashSet<String>>;
+
+    /// Latest miner profile pin set (list of CIDs to pin), if available.
+    fn get_profile_pins(&self) -> Result<Option<Vec<String>>>;
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -118,15 +121,34 @@ impl CidPool {
         Ok(())
     }
 
+    /// Stores the current miner profile CID (optional).
     pub fn set_profile(&self, cid: Option<&str>) -> Result<()> {
         let value = cid.map(|c| c.as_bytes().to_vec());
-        self.db.commit([(1, b"profile", value)])?;
+        self.db.commit([(1, b"profile_v2", value)])?;
         Ok(())
     }
 
+    /// Returns the current miner profile CID, if any.
     pub fn get_profile(&self) -> Result<Option<String>> {
-        if let Some(val) = self.db.get(1, b"profile")? {
+        if let Some(val) = self.db.get(1, b"profile_v2")? {
             Ok(Some(String::from_utf8(val)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Stores the latest miner profile pin set (list of CIDs to pin).
+    pub fn set_profile_pins(&self, cids: &[String]) -> Result<()> {
+        let value = encode_to_vec(cids, config::standard())?;
+        self.db.commit([(1, b"profile_pins", Some(value))])?;
+        Ok(())
+    }
+
+    /// Returns the latest miner profile pin set, if any.
+    pub fn get_profile_pins(&self) -> Result<Option<Vec<String>>> {
+        if let Some(val) = self.db.get(1, b"profile_pins")? {
+            let (pins, _): (Vec<String>, usize) = decode_from_slice(&val, config::standard())?;
+            Ok(Some(pins))
         } else {
             Ok(None)
         }
@@ -218,6 +240,12 @@ impl CidPool {
             tracing::info!("current_profile: {:?}", prof);
         } else {
             tracing::info!("current_profile: None");
+        }
+
+        if let Some(pins) = self.get_profile_pins()? {
+            tracing::info!("current_profile_pins: {:?}", pins);
+        } else {
+            tracing::info!("current_profile_pins: None");
         }
 
         // iterate through all pinned CIDs
@@ -418,6 +446,9 @@ impl PoolTrait for CidPool {
     }
     fn stalled_pins(&self) -> Result<HashSet<String>> {
         self.stalled_pins()
+    }
+    fn get_profile_pins(&self) -> Result<Option<Vec<String>>> {
+        self.get_profile_pins()
     }
 }
 

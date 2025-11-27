@@ -72,6 +72,32 @@ impl Client {
         parse_parquet::<T>(&bytes)
     }
 
+    /// Cat helper *without* the 30s timeout – used for background
+    /// miner profile fetch so that we don't artificially time out.
+    pub async fn cat_no_timeout<T>(&self, cid: &str) -> Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        let url = self.base.join("/api/v0/cat")?;
+        let resp = self
+            .http
+            .post(url)
+            .query(&[("arg", cid)])
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let bytes = resp.bytes().await?;
+
+        if let Ok(text) = std::str::from_utf8(&bytes) {
+            if let Ok(val) = parse_json::<T>(text) {
+                return Ok(val);
+            }
+        }
+
+        parse_parquet::<T>(&bytes)
+    }
+
     pub async fn pin_add_with_progress(&self, cid: &str, tx: ProgressSender) -> Result<()> {
         let url = self.base.join("/api/v0/pin/add")?;
         let resp = self
