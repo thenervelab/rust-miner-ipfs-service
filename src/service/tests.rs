@@ -154,7 +154,7 @@ pub mod tests {
         let cid = "cidA".to_string();
 
         // First call inserts task
-        let first = spawn_pin_task(
+        let (first, permits) = spawn_pin_task(
             ipfs.clone(),
             cid.clone(),
             &active,
@@ -168,7 +168,7 @@ pub mod tests {
         assert!(active.lock().await.len() == 1);
 
         // Second call sees duplicate
-        let second = spawn_pin_task(
+        let (second, permits) = spawn_pin_task(
             ipfs.clone(),
             cid.clone(),
             &active,
@@ -190,7 +190,7 @@ pub mod tests {
         let extra_concurrency = Arc::new(Semaphore::new(0));
 
         let cid = "cidB".to_string();
-        let result = spawn_pin_task(
+        let (result, permits) = spawn_pin_task(
             ipfs,
             cid.clone(),
             &active,
@@ -375,7 +375,7 @@ pub mod tests {
         let extra_concurrency = Arc::new(Semaphore::new(0));
 
         let cid = "cidCancel".to_string();
-        let started = spawn_pin_task(
+        let (started, permits) = spawn_pin_task(
             ipfs,
             cid.clone(),
             &active,
@@ -550,7 +550,7 @@ pub mod tests {
         let extra_concurrency = Arc::new(Semaphore::new(0));
 
         let cid: String = "cidErrPin".into();
-        let started = spawn_pin_task(
+        let (started, permits) = spawn_pin_task(
             ipfs,
             cid.clone(),
             &active,
@@ -813,7 +813,7 @@ pub mod tests {
         let extra_concurrency = Arc::new(Semaphore::new(0));
 
         let cid = "cidPending".to_string();
-        let first = spawn_pin_task(
+        let (first, permits) = spawn_pin_task(
             ipfs.clone(),
             cid.clone(),
             &active,
@@ -822,7 +822,7 @@ pub mod tests {
             extra_concurrency.clone(),
         )
         .await;
-        let second = spawn_pin_task(
+        let (second, permits) = spawn_pin_task(
             ipfs.clone(),
             cid.clone(),
             &active,
