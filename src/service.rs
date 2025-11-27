@@ -1028,14 +1028,6 @@ where
         if all_ongoing_progressed {
             // Node is keeping up → allow one more extra slot.
             extra_concurrency.add_permits(1);
-        } else {
-            // Some ongoing tasks did not progress → reset extra concurrency to 0 free permits.
-            loop {
-                match extra_concurrency.clone().try_acquire_owned() {
-                    Ok(permit) => drop(permit),
-                    Err(_) => break,
-                }
-            }
         }
     }
 
