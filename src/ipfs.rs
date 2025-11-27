@@ -44,7 +44,6 @@ impl Client {
     }
 
     pub async fn check_health(&self) -> Result<()> {
-        tracing::info!("Last step 0");
         let url = self.base.join("/api/v0/id")?;
         let _res = self.http.post(url).send().await?;
         Ok(())
@@ -54,7 +53,6 @@ impl Client {
     where
         T: DeserializeOwned,
     {
-        tracing::info!("Last step 1");
         let url = self.base.join("/api/v0/cat")?;
         let resp = async_std::future::timeout(
             Duration::from_secs(30),
@@ -75,7 +73,6 @@ impl Client {
     }
 
     pub async fn pin_add_with_progress(&self, cid: &str, tx: ProgressSender) -> Result<()> {
-        tracing::info!("Last step 2");
         let url = self.base.join("/api/v0/pin/add")?;
         let resp = self
             .http
@@ -138,7 +135,6 @@ impl Client {
     }
 
     pub async fn pin_rm(&self, cid: &str) -> Result<()> {
-        tracing::info!("Last step 3");
         let url = self.base.join("/api/v0/pin/rm")?;
         self.http
             .post(url)
@@ -151,7 +147,6 @@ impl Client {
 
     /// Lightweight per-CID pin check using /api/v0/pin/ls?arg=<cid>.
     pub async fn pin_ls_single(&self, cid: &str) -> Result<bool> {
-        tracing::info!("Last step 4");
         let url = self.base.join("/api/v0/pin/ls")?;
         let resp = self
             .http
@@ -185,7 +180,6 @@ impl Client {
     }
 
     pub async fn pin_ls_all(&self) -> Result<HashSet<String>> {
-        tracing::info!("Last step 5");
         let mut set = HashSet::new();
         let url = self.base.join("/api/v0/pin/ls")?;
         let resp = self
@@ -236,14 +230,12 @@ impl Client {
     }
 
     pub async fn gc(&self) -> Result<()> {
-        tracing::info!("Last step 6");
         let url = self.base.join("/api/v0/repo/gc")?;
         self.http.post(url).send().await?.error_for_status()?;
         Ok(())
     }
 
     pub async fn connect_bootstrap(&self, addr: &str) -> anyhow::Result<()> {
-        tracing::info!("Last step 7");
         use tokio::time::{Duration, timeout};
 
         let per_step_timeout = Duration::from_secs(10);

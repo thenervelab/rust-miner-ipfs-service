@@ -641,7 +641,7 @@ where
 
         if available < 50.0 {
             tracing::warn!(
-                "Available space on disk used for IPFS storage: {}%",
+                "Available space on disk used for IPFS storage: {:.2}%",
                 available
             );
 
@@ -652,7 +652,7 @@ where
                 .await;
         } else {
             tracing::info!(
-                "Available space on disk used for IPFS storage: {}%",
+                "Available space on disk used for IPFS storage: {:.2}%",
                 available
             );
             notif_state
