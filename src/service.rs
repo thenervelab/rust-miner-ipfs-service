@@ -561,7 +561,7 @@ where
                 continue;
             }
 
-            if spawn_pin_task(
+            let (started, permits_free) = spawn_pin_task(
                 ipfs.clone(),
                 cid.clone(),
                 &active_pins.clone(),
@@ -569,8 +569,13 @@ where
                 base_concurrency.clone(),
                 extra_concurrency.clone(),
             )
-            .await
-            {
+            .await;
+
+            if !permits_free {
+                break;
+            }
+
+            if started {
                 // New background pin task started
 
                 let _ = pool.touch_progress(cid);
@@ -686,11 +691,11 @@ async fn spawn_pin_task<C: IpfsClient + 'static>(
     pending_pins: &PinSet,
     base_concurrency: Arc<Semaphore>,
     extra_concurrency: Arc<Semaphore>,
-) -> bool {
+) -> (bool, bool) {
     let mut active = active_pins.lock().await;
 
     if active.contains_key(&cid) {
-        return false;
+        return (false, true);
     }
 
     // Try to get a permit without waiting: first from base, then from extra.
@@ -740,15 +745,15 @@ async fn spawn_pin_task<C: IpfsClient + 'static>(
                 }
             }
         });
-        true
+        (true, true)
     } else {
         // No slot available → mark as pending
         let mut pending = pending_pins.lock().await;
         if !pending.contains(&cid) {
-            tracing::info!("CID {} added to pending queue", cid);
+            // tracing::info!("CID {} added to pending queue", cid);
             pending.insert(cid);
         }
-        false
+        (false, false)
     }
 }
 
