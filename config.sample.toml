@@ -2,9 +2,9 @@
 poll_interval_secs = 30 # How often to poll the chain for miner profile json CID changes
 reconcile_interval_secs = 6 # How often check progress on ongoing pin tasks
 health_check_interval_secs = 30 # How often to check substrate / ipfs node connection
-initial_pin_concurrency = 32 # Initial number of concurrent pin tasks 
+initial_pin_concurrency = 16 # Initial number of concurrent pin tasks 
 # Increases if all tasks show regular progress
-stalling_pin_task_detection = 120 # How many seconds without progress in a pin task
+stalling_pin_task_detection = 180 # How many seconds without progress in a pin task
 # To trigger stalling pin task warning notification
 
 [db]
