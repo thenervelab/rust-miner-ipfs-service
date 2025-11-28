@@ -124,13 +124,13 @@ impl CidPool {
     /// Stores the current miner profile CID (optional).
     pub fn set_profile(&self, cid: Option<&str>) -> Result<()> {
         let value = cid.map(|c| c.as_bytes().to_vec());
-        self.db.commit([(1, b"profile_v23", value)])?;
+        self.db.commit([(1, b"profile_v211", value)])?;
         Ok(())
     }
 
     /// Returns the current miner profile CID, if any.
     pub fn get_profile(&self) -> Result<Option<String>> {
-        if let Some(val) = self.db.get(1, b"profile_v23")? {
+        if let Some(val) = self.db.get(1, b"profile_v211")? {
             Ok(Some(String::from_utf8(val)?))
         } else {
             Ok(None)
@@ -140,13 +140,13 @@ impl CidPool {
     /// Stores the latest miner profile pin set (list of CIDs to pin).
     pub fn set_profile_pins(&self, cids: &[String]) -> Result<()> {
         let value = encode_to_vec(cids, config::standard())?;
-        self.db.commit([(1, b"profile_pins_v23", Some(value))])?;
+        self.db.commit([(1, b"profile_pins_v211", Some(value))])?;
         Ok(())
     }
 
     /// Returns the latest miner profile pin set, if any.
     pub fn get_profile_pins(&self) -> Result<Option<Vec<String>>> {
-        if let Some(val) = self.db.get(1, b"profile_pins_v23")? {
+        if let Some(val) = self.db.get(1, b"profile_pins_v211")? {
             let (pins, _): (Vec<String>, usize) = decode_from_slice(&val, config::standard())?;
             Ok(Some(pins))
         } else {
