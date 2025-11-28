@@ -517,7 +517,6 @@ pub async fn update_profile_cid(
     let old = pool.get_profile()?;
     if cid_opt != old {
         tracing::info!(old=?old, new=?cid_opt, "profile_cid_changed");
-        pool.set_profile(cid_opt.as_deref())?;
 
         if let Some(cid) = cid_opt {
             let pool_clone = Arc::clone(pool);
@@ -545,6 +544,8 @@ pub async fn update_profile_cid(
                     pool_clone
                         .set_profile_pins(&desired)
                         .context("Failed to persist latest miner profile pins")?;
+
+                    pool_clone.set_profile(Some(&cid_clone))?;
 
                     Ok::<(), anyhow::Error>(())
                 }
