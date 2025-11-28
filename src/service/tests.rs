@@ -397,6 +397,8 @@ pub mod tests {
 
     #[tokio::test]
     async fn test_update_profile_cid_changes() {
+        use httpmock::prelude::*;
+
         // Chain will always return Some("newcid")
         let cid = "a".repeat(46);
         let mut chain = Chain::dummy(true, Some(Ok(Some("0".to_string() + &cid.clone()))));
@@ -417,24 +419,33 @@ pub mod tests {
             ..Default::default()
         };
 
-        let _fetched = chain
-            .fetch_profile_cid(
-                cfg.substrate.raw_storage_key_hex.as_deref(),
-                cfg.substrate.pallet.as_deref(),
-                cfg.substrate.storage_item.as_deref(),
-                cfg.substrate.miner_profile_id.as_deref(),
-            )
-            .await;
+        // Mock IPFS /api/v0/cat to return an empty, but valid, miner profile:
+        // Vec<FileInfo> == []  → serializes as "[]".
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.path("/api/v0/cat");
+            then.status(200).body("[]");
+        });
 
-        let ipfs = Arc::new(Ipfs::new("http://127.0.0.1:5001".into()));
+        // Point the real Ipfs client at the mock server.
+        let ipfs = Arc::new(Ipfs::new(server.base_url()));
 
-        // run update
+        // run update (this will spawn a background task on success)
         let res = update_profile_cid(&cfg, &pool, &mut chain, &ipfs).await;
         dbg!(&res);
         assert!(res.is_ok());
-        let stored = pool.get_profile().unwrap();
 
+        // Give the background task a moment to fetch + persist.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let stored = pool.get_profile().unwrap();
         assert_eq!(stored, Some(cid));
+
+        // Optional: also assert that the pin set was persisted
+        // (it should be an empty Vec since the mock returned "[]").
+        let pins = pool.get_profile_pins().unwrap();
+        assert!(pins.is_some());
+        assert!(pins.unwrap().is_empty());
     }
 
     #[tokio::test]
