@@ -366,6 +366,25 @@ pub async fn run(cfg: Settings, pool: Arc<CidPool>, notifier: Arc<MultiNotifier>
                                     }
                                 }
 
+                                if let Err(e) = update_profile_cid(&cfg, &pool, &mut chain, &ipfs).await {
+                                    tracing::warn!(error=?e, "update_profile_cid_failed");
+                                    notif_state.lock().await.notify_change(
+                                        &notifier,
+                                        "profile_update".to_string(),
+                                        false,
+                                        "Profile update is working again",
+                                        &format!("Profile update failed: {}", e),
+                                    ).await;
+                                } else {
+                                    notif_state.lock().await.notify_change(
+                                        &notifier,
+                                        "profile_update".to_string(),
+                                        true,
+                                        "Profile update is working again",
+                                        "unused",
+                                    ).await;
+                                }
+
                                 bootstrap_done = true;
                             }
                         }

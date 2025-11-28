@@ -96,7 +96,14 @@ pub async fn load(path: Option<&str>, with_env: bool, with_conf: bool) -> Result
         },
         ipfs: IpfsCfg {
             api_url: "http://127.0.0.1:5001".into(),
-            bootstrap: vec![],
+            bootstrap: vec![
+                "/ip4/104.131.131.82/tcp/4001/ipfs/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ".to_string(),
+                "/dns4/ipfs-bootnode-1.hippius.network/tcp/4001/p2p/12D3KooWAtWvvmkeA6y7CAGXhRZMGKYJkHkG7LQAcGearpV4QwKG".to_string(),
+                "/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN".to_string(),
+                "/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa".to_string(),
+                "/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb".to_string(),
+                "/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt".to_string(),
+            ],
         },
         telegram: TelegramCfg {
             bot_token: None,
